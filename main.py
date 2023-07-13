@@ -89,36 +89,38 @@ class ShopifyApp:
         print(response)
         print(response.json())
 
-    def generate_upload_path(self, client):
-        data = {"query": '''
+    def generate_staged_target(self, client):
+        data = {
+            "query": '''
                     mutation {
-                        stagedUploadsCreate(
-                            input:{
-                                resource: BULK_MUTATION_VARIABLES,
-                                filename: "bulk_op_vars",
-                                mimeType: "text/jsonl",
-                                httpMethod: POST
+                        stagedUploadsCreate(input:{
+                            resource: BULK_MUTATION_VARIABLES,
+                            filename: "bulk_op_vars.jsonl",
+                            mimeType: "text/jsonl",
+                            httpMethod: POST
+                        })
+                        {
+                            userErrors{
+                                field,
+                                message
                             }
-                        )
-                    {
-                    userErrors{
-                        field,
-                        message
-                    },
-                    stagedTargets{
-                        url,
-                        resourceUrl,
-                        parameters {
-                            name,
-                            value
+                            stagedTargets{
+                                url,
+                                resourceUrl,
+                                parameters {
+                                    name,
+                                    value
+                                }    
+                            }
                         }
                     }
-                '''
-                }
+            '''
+        }
 
-        response = client.post(f'https://{self.store_name}.myshopify.com/admin/api/2023-07/graphql.json')
+        response = client.post(f'https://{self.store_name}.myshopify.com/admin/api/2023-07/graphql.json', json=data)
         print(response)
         print(response.json())
+        return response.json()
 
     def create_products(self, client):
         data = {
@@ -146,6 +148,22 @@ class ShopifyApp:
         print(csvfile.to_json(orient='records', lines=True), file=jsonfile, flush=False)
         jsonfile.close()
 
+    def upload_jsonl(self, client, staged_target, jsonl_path):
+        url = staged_target['data']['stagedUploadsCreate']['stagedTargets'][0]['url']
+        parameters = staged_target['data']['stagedUploadsCreate']['stagedTargets'][0]['parameters']
+        files = dict()
+        for parameter in parameters:
+            files[f"{parameter['name']}"] = parameter['value']
+        files['file'] = ('bulk_op_vars', open(jsonl_path, 'rb'), 'text/jsonl')
+
+        headers = {
+            'Content-Type': 'multipart/form-data'
+        }
+
+        client.headers.update(headers)
+        client.post(url, files=files)
+
+
 
 if __name__ == '__main__':
     s = ShopifyApp()
@@ -153,5 +171,6 @@ if __name__ == '__main__':
     # s.query_shop(client)
     # s.query_product(client)
     # s.create_product(client)
-    s.csv_to_jsonl(input_filename='result.csv', output_filename='result.jsonl')
-    # s.generate_upload_path(client)
+    # s.csv_to_jsonl(input_filename='result.csv', output_filename='result.jsonl')
+    staged_target = s.generate_staged_target(client)
+    # s.upload_jsonl(client, staged_target=staged_target)
