@@ -2,6 +2,8 @@ import httpx
 from dataclasses import dataclass
 import creds
 import json
+import os
+import pandas as pd
 
 @dataclass
 class ShopifyApp:
@@ -87,43 +89,69 @@ class ShopifyApp:
         print(response)
         print(response.json())
 
-    # def create_product(self, client):
-    #     data = '''
-    #         mutation {
-    #             productCreate(
-    #                 input: {
-    #                     title: "Xmas Rocks Beavis And Butt-Head Hoodie",
-    #                     productType: "Hoodies",
-    #                     vendor: "My Store",
-    #                     variants: [
-    #                         {
-    #                             title: "Default",
-    #                             price: "79.99",
-    #                             inventoryManagement: SHOPIFY,
-    #                             inventoryPolicy: DENY,
-    #                             inventoryQuantity: 10
-    #                         }
-    #                     ]
-    #                 },
-    #                 media: {
-    #                     originalSource: "//80steess3.imgix.net/production/products/BAB061/xmas-rocks-beavis-and-butt-head-hoodie.master.png?w=500&h=750&fit=fill&usm=12&sat=15&fill-color=00FFFFFF&auto=compress,format&q=40&nr=15",
-    #                     mediaContentType: IMAGE
-    #                 }
-    #             ) {
-    #                 product {
-    #                     id
-    #                     title
-    #                 }
-    #             }
-    #         }
-    #     '''
-    #     response = client.post(f'https://{self.store_name}.myshopify.com/admin/api/2023-07/graphql.json', json=data)
-    #     print(response)
-    #     print(response.json())
+    def generate_upload_path(self, client):
+        data = {"query": '''
+                    mutation {
+                        stagedUploadsCreate(
+                            input:{
+                                resource: BULK_MUTATION_VARIABLES,
+                                filename: "bulk_op_vars",
+                                mimeType: "text/jsonl",
+                                httpMethod: POST
+                            }
+                        )
+                    {
+                    userErrors{
+                        field,
+                        message
+                    },
+                    stagedTargets{
+                        url,
+                        resourceUrl,
+                        parameters {
+                            name,
+                            value
+                        }
+                    }
+                '''
+                }
+
+        response = client.post(f'https://{self.store_name}.myshopify.com/admin/api/2023-07/graphql.json')
+        print(response)
+        print(response.json())
+
+    def create_products(self, client):
+        data = {
+            "query": '''
+                mutation {
+                    bulkOperationMutation(
+                        input: {
+                            clientIdentifier: ""
+                            mutation: "",
+                            stagedUploadPath: "",    
+                        }    
+                    )
+                }
+            '''
+        }
+
+        response = client.post(f'https://{self.store_name}.myshopify.com/admin/api/2023-07/graphql.json', json=data)
+        print(response)
+        print(response.json())
+
+    def csv_to_jsonl(self, input_filename, output_filename):
+        csvfile = pd.read_csv(os.path.join(os.getcwd(), input_filename), encoding='utf-16')
+
+        jsonfile = open(os.path.join(os.getcwd(), output_filename), 'w')
+        print(csvfile.to_json(orient='records', lines=True), file=jsonfile, flush=False)
+        jsonfile.close()
+
 
 if __name__ == '__main__':
     s = ShopifyApp()
     client = s.create_session()
-    s.query_shop(client)
-    s.query_product(client)
-    s.create_product(client)
+    # s.query_shop(client)
+    # s.query_product(client)
+    # s.create_product(client)
+    s.csv_to_jsonl(input_filename='result.csv', output_filename='result.jsonl')
+    # s.generate_upload_path(client)
