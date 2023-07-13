@@ -122,7 +122,11 @@ class ShopifyApp:
         print(response.json())
         return response.json()
 
-    def create_products(self, client):
+    def create_products(self, client, csv_filename, jsonl_filename):
+        self.csv_to_jsonl(csv_filename=csv_filename, jsonl_filename=jsonl_filename)
+        self.generate_staged_target(client)
+        self.upload_jsonl(client)
+        self.import_bulk_data(client)
         data = {
             "query": '''
                 mutation {
@@ -141,10 +145,10 @@ class ShopifyApp:
         print(response)
         print(response.json())
 
-    def csv_to_jsonl(self, input_filename, output_filename):
-        csvfile = pd.read_csv(os.path.join(os.getcwd(), input_filename), encoding='utf-16')
+    def csv_to_jsonl(self, csv_filename, jsonl_filename):
+        csvfile = pd.read_csv(os.path.join(os.getcwd(), csv_filename), encoding='utf-16')
 
-        jsonfile = open(os.path.join(os.getcwd(), output_filename), 'w')
+        jsonfile = open(os.path.join(os.getcwd(), jsonl_filename), 'w')
         print(csvfile.to_json(orient='records', lines=True), file=jsonfile, flush=False)
         jsonfile.close()
 
@@ -163,6 +167,8 @@ class ShopifyApp:
         client.headers.update(headers)
         client.post(url, files=files)
 
+    def import_bulk_data(self, client):
+        pass
 
 
 if __name__ == '__main__':
