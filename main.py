@@ -13,7 +13,6 @@ class ShopifyApp:
     store_name: str = creds.store_name
     access_token: str = creds.access_token
 
-
     def create_session(self):
         print("Creating session...")
         client = httpx.Client()
@@ -64,25 +63,37 @@ class ShopifyApp:
     def create_product(self, client):
         print("Creating product...")
         mutation = '''
-                    mutation {
+                    mutation (
+                            $handle: String,
+                            $title: String,
+                            $vendor: String,
+                            $productType: String,
+                            $variantTitle: String,
+                            $variantPrice: Money,
+                            $inventoryManagement: ProductVariantInventoryManagement,
+                            $inventoryPolicy: ProductVariantInventoryPolicy,
+                            $mediaOriginalSource: String!,
+                            $mediaContentType: MediaContentType!
+                    )
+                    {
                         productCreate(
                             input: {
-                                handle: "BAB063"
-                                title: "Xmas Rocks Beavis And Butt-Head Shirt",
-                                productType: "Shirts",
-                                vendor: "MyStore"
+                                handle: $handle,
+                                title: $title,
+                                productType: $productType,
+                                vendor: $vendor
                                 variants: [
                                     {
-                                        title: "Default",
-                                        price: "79.99",
-                                        inventoryManagement: SHOPIFY,
-                                        inventoryPolicy: DENY
+                                        title: $variantTitle,
+                                        price: $variantPrice,
+                                        inventoryManagement: $inventoryManagement,
+                                        inventoryPolicy: $inventoryPolicy
                                     }
                                 ]
                             }
                             media: {
-                                originalSource: "https://80steess3.imgix.net/production/products/BAB061/xmas-rocks-beavis-and-butt-head-hoodie.master.png",
-                                mediaContentType: IMAGE
+                                originalSource: $mediaOriginalSource,
+                                mediaContentType: $mediaContentType
                             }    
                         )
                         {
@@ -93,8 +104,21 @@ class ShopifyApp:
                     }
                     '''
 
+        variables = {
+            'handle': "BAB063",
+            'title': "Xmas Rocks Beavis And Butt-Head Shirt",
+            'productType': "Shirts",
+            'vendor': "MyStore",
+            'variantsTitle': "Default",
+            'variantPrice': "79.99",
+            'inventoryManagement': 'SHOPIFY',
+            'inventoryPolicy': 'DENY',
+            'mediaOriginalSource': "https://80steess3.imgix.net/production/products/BAB061/xmas-rocks-beavis-and-butt-head-hoodie.master.png",
+            'mediaContentType': 'IMAGE'
+            }
+
         response = client.post(f'https://{self.store_name}.myshopify.com/admin/api/2023-07/graphql.json',
-                               json={"query": mutation})
+                               json={"query": mutation, 'variables':variables,})
         print(response)
         print(response.json())
         print('')
@@ -179,7 +203,6 @@ class ShopifyApp:
                             }
                             '''
 
-        print(staged_target['data']['stagedUploadsCreate']['stagedTargets'][0]['parameters'][3]['value'])
         variables = {
             "stagedUploadPath": staged_target['data']['stagedUploadsCreate']['stagedTargets'][0]['parameters'][3]['value']
         }
@@ -262,7 +285,6 @@ class ShopifyApp:
         #     print(csvfile.to_json(orient='records', lines=True), file=jsonfile, flush=False)
         # print('')
 
-
     def upload_jsonl(self, staged_target, jsonl_path):
         print("Uploading jsonl file to staged path...")
         url = staged_target['data']['stagedUploadsCreate']['stagedTargets'][0]['url']
@@ -341,16 +363,12 @@ class ShopifyApp:
     def create_collection(self, client):
         print('Creating collection...')
         mutation = '''
-        mutation {
+        mutation ($descriptionHtml: String!, $title: String!){
             collectionCreate(
                 input: {
-                    descriptionHtml: "<p>This Collection is created as a training material</p>",
-                    title: "Collection1"
-                    products: [
-                        "gid://shopify/Product/8422055903546",
-                        "gid://shopify/Product/8422055936314"
-                    ]    
-                }        
+                    descriptionHtml: $descriptionHtml
+                    title: $title
+                }
             )
             {
                 collection{
@@ -365,8 +383,13 @@ class ShopifyApp:
         }    
         '''
 
+        variables = {
+            'descriptionHtml': "<p>This Collection is created as a training material</p>",
+            'title': "Collection1"
+        }
+
         response = client.post(f'https://{self.store_name}.myshopify.com/admin/api/2023-07/graphql.json',
-                               json={"query": mutation})
+                               json={"query": mutation, 'variables': variables})
         print(response)
         print(response.json())
         print('')
@@ -422,15 +445,18 @@ class ShopifyApp:
         print(response.json())
         print('')
 
-    def get_collection(self, client):
+    def get_collections(self, client):
         print('Getting collection list...')
         query = '''
                 query {
-                    publications(first: 10){
+                    collections(first: 10){
                         edges{
                             node{
                                 id
-                                name
+                                title
+                                handle
+                                updatedAt
+                                productsCount
                             }
                         }
                     }
@@ -462,21 +488,24 @@ class ShopifyApp:
         status = response_data['data']['node']['status']
         return status
 
+    def products_to_collection(self, client):
+        pass
 
 if __name__ == '__main__':
     s = ShopifyApp()
     client = s.create_session()
     # s.query_shop(client)
     # s.query_product(client)
-    # s.create_product(client)
+    s.create_product(client)
     # s.csv_to_jsonl(csv_filename='result.csv', jsonl_filename='test2.jsonl')
     # staged_target = s.generate_staged_target(client)
     # s.upload_jsonl(staged_target=staged_target, jsonl_path="D:/Naru/shopifyAPI/bulk_op_vars.jsonl")
     # s.create_products(client, staged_target=staged_target)
-    s.import_bulk_data(client=client, csv_filename='result.csv', jsonl_filename='bulk_op_vars.jsonl')
+    # s.import_bulk_data(client=client, csv_filename='result.csv', jsonl_filename='bulk_op_vars.jsonl')
     # s.webhook_subscription(client)
     # s.create_collection(client)
     # s.query_product(client)
     # s.get_publications(client)
+    # s.get_collections(client)
     # s.pool_operation_status(client)
     # print(s.check_bulk_operation_status(client, bulk_operation_id='gid://shopify/BulkOperation/3252439023930'))
