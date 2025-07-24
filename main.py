@@ -1,129 +1,106 @@
-import httpx
+from httpx import Client
 from dataclasses import dataclass
-import creds
 import json
 import os
 import pandas as pd
 from urllib.parse import urljoin
 from datetime import datetime
+from dotenv import load_dotenv
 
 
 @dataclass
 class ShopifyApp:
-    store_name: str = creds.store_name
-    access_token: str = creds.access_token
+    store_name: str = None
+    access_token: str = None
+    client: Client() = None
+    api_version: str = '2025-07'
 
+    # Support
+    def send_request(self, query, variables=None):
+        if self.client:
+            response = self.client.post(
+                f'https://{self.store_name}.myshopify.com/admin/api/{self.api_version}/graphql.json',
+                json={"query": query, "variables": variables}
+            )
+
+            print(response)
+            print(response.json())
+            print('')
+
+            return response.json()
+
+        else:
+            print('Please create session before execute the function')
+
+    # Create
+    # ===================================== Session ====================================
     def create_session(self):
         print("Creating session...")
-        client = httpx.Client()
+        client = Client()
         headers = {
             'X-Shopify-Access-Token': self.access_token,
             'Content-Type': 'application/json'
         }
         client.headers.update(headers)
-        return client
+        self.client = client
 
-    def query_shop(self, client):
-        print("Fetching shop data...")
-        query = '''
-                {
-                    shop{
-                        name
-                    }
-                }
-                '''
-
-        response = client.post(f'https://{self.store_name}.myshopify.com/admin/api/2023-07/graphql.json',
-                               json={"query": query})
-        print(response)
-        print(response.json())
-        print('')
-
-    def query_product(self, client):
-        print("Fetching product data...")
-        query = '''
-                {
-                    products(first: 3) {
-                        edges {
-                            node {
-                                id
-                                title
-                            }
-                        }
-                    }
-                }
-                '''
-
-        response = client.post(f'https://{self.store_name}.myshopify.com/admin/api/2023-07/graphql.json',
-                               json={"query": query})
-        print(response)
-        print(response.json())
-        print('')
-
-    def create_product(self, client):
+    # ===================================== Products ===================================
+    def create_product(self, variables):
         print("Creating product...")
         mutation = '''
-                    mutation (
-                            $handle: String,
-                            $title: String,
-                            $vendor: String,
-                            $productType: String,
-                            $variantTitle: String,
-                            $variantPrice: Money,
-                            $inventoryManagement: ProductVariantInventoryManagement,
-                            $inventoryPolicy: ProductVariantInventoryPolicy,
-                            $mediaOriginalSource: String!,
-                            $mediaContentType: MediaContentType!
-                    )
-                    {
-                        productCreate(
-                            input: {
-                                handle: $handle,
-                                title: $title,
-                                productType: $productType,
-                                vendor: $vendor
-                                variants: [
-                                    {
-                                        title: $variantTitle,
-                                        price: $variantPrice,
-                                        inventoryManagement: $inventoryManagement,
-                                        inventoryPolicy: $inventoryPolicy
-                                    }
-                                ]
-                            }
-                            media: {
-                                originalSource: $mediaOriginalSource,
-                                mediaContentType: $mediaContentType
-                            }    
-                        )
-                        {
-                            product {
-                                id
-                            }
-                        }
+            mutation (
+                $handle: String,
+                $title: String,
+                $descriptionHtml: String,
+                $vendor: String,
+                $category: ID,
+                $productType: String,
+                $tags: [String!],
+                $productOptions:[OptionCreateInput!],
+                $media: [CreateMediaInput!],
+                $giftCard:Boolean,
+                $seo: SEOInput,
+                $status: ProductStatus
+            )
+
+            {
+                productCreate(
+                    product: {
+                        handle: $handle,
+                        title: $title,
+                        descriptionHtml: $descriptionHtml,
+                        vendor: $vendor,
+                        category: $category,
+                        productType: $productType,
+                        tags: $tags,
+                        productOptions: $productOptions,
+                        giftCard: $giftCard,
+                        seo: $seo,
+                        status: $status
                     }
-                    '''
+                    media: $media
+                )
 
-        variables = {
-            'handle': "BAB063",
-            'title': "Xmas Rocks Beavis And Butt-Head Shirt",
-            'productType': "Shirts",
-            'vendor': "MyStore",
-            'variantsTitle': "Default",
-            'variantPrice': "79.99",
-            'inventoryManagement': 'SHOPIFY',
-            'inventoryPolicy': 'DENY',
-            'mediaOriginalSource': "https://80steess3.imgix.net/production/products/BAB061/xmas-rocks-beavis-and-butt-head-hoodie.master.png",
-            'mediaContentType': 'IMAGE'
+                {
+                    product {
+                        id
+                    }
+                }
             }
+        '''
 
-        response = client.post(f'https://{self.store_name}.myshopify.com/admin/api/2023-07/graphql.json',
-                               json={"query": mutation, 'variables':variables,})
-        print(response)
-        print(response.json())
-        print('')
+        response = self.send_request(query=mutation, variables=variables)
+        product_data = response
 
-    def generate_staged_target(self, client):
+        if variables['published'] is True:
+            publication_data = self.query_publication()
+            publication_input = [{'publicationId': item['id']} for item in publication_data['data']['publications']['nodes']]
+            self.publish_product(product_id=product_data['data']['productCreate']['product']['id'], publication_input=publication_input)
+
+        self.create_variants(product_id=product_data['data']['productCreate']['product']['id'], variants=variables['variants'], media=variables['media'], strategy='REMOVE_STANDALONE_VARIANT')
+
+    # =================================== staged_target ================================
+    def generate_staged_target(self):
         print("Creating stage upload...")
         mutation = '''
                     mutation {
@@ -146,18 +123,201 @@ class ShopifyApp:
                                 parameters {
                                     name,
                                     value
-                                }    
+                                }
                             }
                         }
                     }
                     '''
 
-        response = client.post(f'https://{self.store_name}.myshopify.com/admin/api/2023-07/graphql.json',
-                               json={"query": mutation})
-        print(response)
-        print(response.json())
-        print('')
-        return response.json()
+        if self.client:
+            response = self.client.post(
+                f'https://{self.store_name}.myshopify.com/admin/api/{self.api_version}/graphql.json',
+                json={"query": mutation}
+            )
+
+            print(response)
+            print(response.json())
+            print('')
+
+            return response.json()
+
+        else:
+            print('Please create session before execute the function')
+
+    # ================================== Create Variants ===============================
+    def create_variants(self, product_id, variants, media, strategy='DEFAULT'):
+        print('Creating Variants...')
+        mutation = '''
+            mutation productVariantsBulkCreate($productId: ID!, $variants: [ProductVariantsBulkInput!]!, $media: [CreateMediaInput!], $strategy: ProductVariantsBulkCreateStrategy) {
+                productVariantsBulkCreate(productId: $productId, variants: $variants, media: $media, strategy: $strategy) {
+                    product {
+                        id
+                    }
+                    productVariants {
+                        id
+                        metafields(first: 1) {
+                            edges {
+                                node {
+                                    namespace
+                                    key
+                                    value
+                                }
+                            }
+                        }
+                    }
+                    userErrors {
+                      field
+                      message
+                    }
+                }
+            }
+        '''
+
+        variables = {
+            'productId': product_id,
+            'variants': variants,
+            'media': media,
+            'strategy': strategy
+        }
+
+        return self.send_request(query=mutation, variables=variables)
+
+    # Read
+    # ====================================== Shop ======================================
+    def query_shop(self):
+        print("Fetching shop data...")
+        query = '''
+                {
+                    shop{
+                        name
+                    }
+                }
+                '''
+
+        self.send_request(query=query)
+
+    # ===================================== Products ===================================
+    def query_products(self):
+        print("Fetching product data...")
+        query = '''
+                {
+                    products(first: 250) {
+                        edges {
+                            node {
+                                handle
+                                id
+                                title
+                            }
+                        }
+                    }
+                }
+                '''
+
+        self.send_request(query=query)
+
+    # ============================= get_products_id_by_handle ==========================
+    def get_products_id_by_handle(self, handles):
+        print('Getting product id...')
+        f_handles = ','.join(handles)
+        query = '''
+            query(
+                $query: String
+            )
+            {
+                products(first: 250, query: $query) {
+                    edges {
+                        node {
+                            handle
+                            id
+                        }
+                    }
+                    pageInfo {
+                        endCursor
+                        hasNextPage
+                    }
+                }
+            }
+        '''
+        variables = {'query': "handle:{}".format(f_handles)}
+
+        return self.send_request(query=query, variables=variables)
+
+    # =================================== Publications =================================
+    def query_publication(self):
+        print("Fetching publications data...")
+        query = '''
+            {
+                publications(first: 250) {
+                    nodes{
+                        id
+                    }
+                }
+            }
+        '''
+
+        return self.send_request(query=query)
+
+    # Update
+    # ===================================== Publish Product ====================================
+    def publish_product(self, product_id, publication_input):
+        print("Publishing product...")
+        publish_mutation = '''
+            mutation publishablePublish($id: ID!, $input: [PublicationInput!]!) {
+                publishablePublish(id: $id, input: $input) {
+                    publishable {
+                        availablePublicationsCount {
+                            count
+                        }
+                        resourcePublicationsCount {
+                            count
+                        }
+                    }
+                    shop {
+                        publicationCount
+                    }
+                    userErrors {
+                        field
+                        message
+                    }
+                }
+            }
+        '''
+
+        publish_variables = {
+            "id": product_id,
+            "input": publication_input
+        }
+
+        return self.send_request(query=publish_mutation, variables=publish_variables)
+
+    # Delete
+    # ===================================== Product ====================================
+    def delete_products_by_handle(self, handles):
+        print('Deleting Product...')
+
+        response = self.get_products_id_by_handle(handles=handles)
+        try:
+            found_flag = response['data']['products']['edges'][0]
+            product_ids = [item['node']['id'] for item in response['data']['products']['edges']]
+            for product_id in product_ids:
+                mutation = '''
+                    mutation productDelete($input: ProductDeleteInput!) {
+                        productDelete(input: $input) {
+                            deletedProductId
+                        }
+                    }
+                '''
+
+                variables = {
+                    'input': {
+                        'id': product_id
+                    }
+                }
+
+                self.send_request(query=mutation, variables=variables)
+
+        except IndexError:
+            print('Item Not Found')
 
     def create_products(self, client, staged_target):
         print('Creating products...')
@@ -330,7 +490,7 @@ class ShopifyApp:
         print(response.json())
         print('')
 
-    def pool_operation_status(self,client):
+    def pool_operation_status(self, client):
         print("Pooling operation status...")
         query = '''
                     query {
@@ -390,27 +550,6 @@ class ShopifyApp:
 
         response = client.post(f'https://{self.store_name}.myshopify.com/admin/api/2023-07/graphql.json',
                                json={"query": mutation, 'variables': variables})
-        print(response)
-        print(response.json())
-        print('')
-
-    def get_publications(self, client):
-        print('Getting publications list...')
-        query = '''
-        query {
-            publications(first: 10){
-                edges{
-                    node{
-                        id
-                        name
-                    }
-                }
-            }
-        }
-        '''
-
-        response = client.post(f'https://{self.store_name}.myshopify.com/admin/api/2023-07/graphql.json',
-                               json={"query": query})
         print(response)
         print(response.json())
         print('')
@@ -488,15 +627,226 @@ class ShopifyApp:
         status = response_data['data']['node']['status']
         return status
 
-    def products_to_collection(self, client):
-        pass
 
 if __name__ == '__main__':
-    s = ShopifyApp()
-    client = s.create_session()
-    # s.query_shop(client)
-    # s.query_product(client)
-    s.create_product(client)
+    # Example
+    load_dotenv()
+
+    # ============================== Create Session ====================================
+    s = ShopifyApp(
+        store_name=os.getenv('STORE_NAME'),
+        access_token=os.getenv('ACCESS_TOKEN')
+    )
+
+    s.create_session()
+
+    # ================================== Query Shop ====================================
+    # s.query_shop()
+
+    # ================================ Query Product ===================================
+    # s.query_products()
+
+    # ============================== Query Publications ================================
+    # s.query_publication()
+
+    # ================================ Create Product ==================================
+    variables = {
+        'handle': 'christmas-gift-electric-ride-on-toy-car-for-kids-12v-battery-powered-with-remote-control',
+        'title': 'Christmas Gift Electric Ride-On Toy Car for Kids - 12V Battery Powered with Remote Control',
+        'descriptionHtml': '''The X-Mas Ride On Kids Truck is the perfect toy car for kids during the holiday season. With its sleek design and exciting features, it is sure to bring joy and adventure to children of all ages.<br><br>This ride-on truck offers two modes of play. In the parental remote control mode, parents can take control and enjoy the ride with their little ones. In the battery-operated mode, children can operate the truck themselves using the pedal for acceleration and the steering wheel for navigation. Please note that this <a href="https://www.magiccars.com">ride-on</a> truck comes in two boxes, so please wait patiently for both boxes to be delivered before assembly.<br><br>One of the most attractive and fun functions of this ride-on truck is its ability to be connected to devices such as MP3 players, AUX inputs, USB ports, and TF card slots. This means that children can enjoy their favorite music or stories while cruising around in style.<br><br>Safety is a top priority with this ride-on truck. It features a soft start function, ensuring a smooth and gradual acceleration. The four wear-resistant wheels are made of superior PP materials, providing durability and eliminating the need for inflating tires. This guarantees a safer and smoother driving experience for kids.<br><br>The X-Mas Ride On Kids Truck also boasts a cool and realistic appearance. With bright front and rear lights and double doors with magnetic locks, children will feel like they are driving a real truck. This attention to detail creates an authentic and immersive driving experience.<br><br>This ride-on truck is not only fun but also makes for a perfect gift for children. Whether it's for a birthday or Christmas, this scientifically designed toy car will bring smiles and laughter to any child's face.<br><br>Key Features:<br>- Two modes of play: parental remote control mode and battery-operated mode<br>- Forward and reverse functions with three adjustable speeds<br>- MP3 player, AUX input, USB port, and TF card slot for music and stories<br>- Soft start function for a smooth and gradual acceleration<br>- Four wear-resistant wheels made of superior PP materials<br>- Bright front and rear lights for a realistic driving experience<br>- Double doors with magnetic locks<br>- Overall dimension: 46.5"×31"×29"(L×W×H)<br>- Recommended for ages: 3-7 years old<br>- Assembly required<br><br>Specifications:<br>- Brand: Unbranded<br>- Year: 2022<br>- Theme: Cars<br>- Age Level: 3-4 Years, 4-7<br>- Character Family: Toy Story<br>- Color: White<br><br>Get ready for a thrilling and adventurous ride with the X-Mas Ride On Kids Truck. Order now and make this holiday season one to remember!''',
+        'vendor': 'Magic Cars',
+        'category': 'gid://shopify/TaxonomyCategory/tg-5-20-1',
+        'productType': '',
+        'tags': ['12v Ride On Toy'],
+        'published': True,
+        'productOptions': [
+            {
+                'name': 'Warranty',
+                'values': [
+                    {
+                        'name': 'None - $0'
+                    },
+                    {
+                        'name': '1 year - $89'
+                    }
+                ]
+            },
+            {
+                'name': 'Custom license plate',
+                'values': [
+                    {
+                        'name': 'None - $0'
+                    },
+                    {
+                        'name': 'Custom license plate - $39'
+                    }
+                ]
+            }
+        ],
+        'media': [
+            {
+                'originalSource': 'https://cdn.shopify.com/s/files/1/2245/9711/products/s-l500_cf86f1f2-7469-4029-bce6-110c5d81b77d.png?v=1694748618',
+                'mediaContentType': 'IMAGE'
+            },
+            {
+                'originalSource': 'https://cdn.shopify.com/s/files/1/2245/9711/products/s-l1600_950bb713-e831-4794-9d27-ce6e5a233362.jpg?v=1694748618',
+                'mediaContentType': 'IMAGE'
+            },
+            {
+                'originalSource': 'https://cdn.shopify.com/s/files/1/2245/9711/products/s-l1600_b8a2df74-6906-4896-a67d-363080b6e664.jpg?v=1694748618',
+                'mediaContentType': 'IMAGE'
+            },
+            {
+                'originalSource': 'https://cdn.shopify.com/s/files/1/2245/9711/products/s-l1600_caec825f-9f2c-4fbf-b52e-8a10556386eb.jpg?v=1694748618',
+                'mediaContentType': 'IMAGE'
+            },
+            {
+                'originalSource': 'https://cdn.shopify.com/s/files/1/2245/9711/products/s-l1600_2d958d03-9672-49bf-a26e-96b89c9b1c71.jpg?v=1694748618',
+                'mediaContentType': 'IMAGE'
+            }
+        ],
+        'variants': [
+            {
+                'optionValues': [
+                    {
+                        'name': 'None - $0',
+                        'optionName': 'Warranty'
+                    },
+                    {
+                        'name': 'None - $0',
+                        'optionName': 'Custom license plate'
+                    }
+                ],
+                'inventoryItem': {
+                    'sku': '25-00001',
+                    'measurement': {
+                        'weight': {
+                            'unit': 'GRAMS',
+                            'value': 38555.986479318
+                        }
+                    },
+                    'tracked': True,
+                    'requiresShipping': True,
+                    'cost': 398.88
+                },
+                'inventoryPolicy': 'DENY',
+                'price': 598.88,
+                'compareAtPrice': 778.54,
+                'taxable': True,
+                'barcode': '315584591043',
+                'mediaSrc': 'https://cdn.shopify.com/s/files/1/2245/9711/products/s-l500_cf86f1f2-7469-4029-bce6-110c5d81b77d.png?v=1694748618',
+
+            },
+            {
+                'optionValues': [
+                    {
+                        'name': 'None - $0',
+                        'optionName': 'Warranty'
+                    },
+                    {
+                        'name': 'Custom license plate - $39',
+                        'optionName': 'Custom license plate'
+                    }
+                ],
+                'inventoryItem': {
+                    'sku': '25-00002',
+                    'measurement': {
+                        'weight': {
+                            'unit': 'GRAMS',
+                            'value': 38555.986479318
+                        }
+                    },
+                    'tracked': True,
+                    'requiresShipping': True,
+                    'cost': 437.88
+                },
+                'inventoryPolicy': 'DENY',
+                'price': 637.88,
+                'compareAtPrice': 829.24,
+                'taxable': True,
+                'barcode': '315584591050',
+                'mediaSrc': 'https://cdn.shopify.com/s/files/1/2245/9711/products/s-l1600_950bb713-e831-4794-9d27-ce6e5a233362.jpg?v=1694748618',
+            },
+            {
+                'optionValues': [
+                    {
+                        'name': '1 year - $89',
+                        'optionName': 'Warranty'
+                    },
+                    {
+                        'name': 'None - $0',
+                        'optionName': 'Custom license plate'
+                    }
+                ],
+                'inventoryItem': {
+                    'sku': '25-00003',
+                    'measurement': {
+                        'weight': {
+                            'unit': 'GRAMS',
+                            'value': 38555.986479318
+                        }
+                    },
+                    'tracked': True,
+                    'requiresShipping': True,
+                    'cost': 487.88
+                },
+                'inventoryPolicy': 'DENY',
+                'price': 687.88,
+                'compareAtPrice': 894.24,
+                'taxable': True,
+                'barcode': '315584591067',
+                'mediaSrc': 'https://cdn.shopify.com/s/files/1/2245/9711/products/s-l1600_b8a2df74-6906-4896-a67d-363080b6e664.jpg?v=1694748618',
+
+            },
+            {
+                'optionValues': [
+                    {
+                        'name': '1 year - $89',
+                        'optionName': 'Warranty'
+                    },
+                    {
+                        'name': 'Custom license plate - $39',
+                        'optionName': 'Custom license plate'
+                    }
+                ],
+                'inventoryItem': {
+                    'sku': '25-00004',
+                    'measurement': {
+                        'weight': {
+                            'unit': 'GRAMS',
+                            'value': 38555.986479318
+                        }
+                    },
+                    'tracked': True,
+                    'requiresShipping': True,
+                    'cost': 526.88
+                },
+                'inventoryPolicy': 'DENY',
+                'price': 726.88,
+                'compareAtPrice': 944.94,
+                'taxable': True,
+                'barcode': '315584591074',
+                'mediaSrc': 'https://cdn.shopify.com/s/files/1/2245/9711/products/s-l1600_caec825f-9f2c-4fbf-b52e-8a10556386eb.jpg?v=1694748618',
+            },
+        ],
+        'giftCard': False,
+        'seo': {
+            'title': '',
+            'description': ''
+        },
+        'status': 'ACTIVE'
+    }
+
+    s.create_product(variables=variables)
+
+    # =========================== Delete Products By Handle ============================
+    # handles = ['christmas-gift-electric-ride-on-toy-car-for-kids-12v-battery-powered-with-remote-control']
+    # s.delete_products_by_handle(handles=handles)
+
+    # =========================== Get Product Id By Handle ============================
+    # handles = ['christmas-gift-electric-ride-on-toy-car-for-kids-12v-battery-powered-with-remote-control']
+    # s.get_products_id_by_handle(handles=handles)
+
     # s.csv_to_jsonl(csv_filename='result.csv', jsonl_filename='test2.jsonl')
     # staged_target = s.generate_staged_target(client)
     # s.upload_jsonl(staged_target=staged_target, jsonl_path="D:/Naru/shopifyAPI/bulk_op_vars.jsonl")
@@ -504,7 +854,6 @@ if __name__ == '__main__':
     # s.import_bulk_data(client=client, csv_filename='result.csv', jsonl_filename='bulk_op_vars.jsonl')
     # s.webhook_subscription(client)
     # s.create_collection(client)
-    # s.query_product(client)
     # s.get_publications(client)
     # s.get_collections(client)
     # s.pool_operation_status(client)
