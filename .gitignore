@@ -160,8 +160,11 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-data/
+data/test*.csv
 *.toml
 *.lock
 .python-version
 notes.py
+data/chunked/
+data/products_export_2.csv
+location.json

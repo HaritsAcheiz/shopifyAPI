@@ -38,21 +38,81 @@ class ShopifyApp:
         else:
             print('Please create session before execute the function')
 
-    # def clean_and_collect_tags(self, series):
-    #     """
-    #     Takes a pandas Series of comma-separated strings,
-    #     splits them, strips whitespace, and returns a sorted list of unique tags.
-    #     """
-    #     print(f'series: {series}')
-    #     for tag_string in series.dropna(): # Handle NaN values if any
-    #         # Split by comma, then strip each resulting part
-    #         cleaned_parts = [part.strip() for part in tag_string.split(',')]
-    #         print(f'cleaned_parts: {cleaned_parts}')
-    #     # Return unique and sorted tags
-    #     return cleaned_parts
+    # ==================================== Clean Tags ================================
+    def clean_and_collect_tags(self, series):
+        """
+        Takes a pandas Series of comma-separated strings,
+        splits them, strips whitespace, and returns a sorted list of unique tags.
+        """
+        print(f'series: {series}')
+        for tag_string in series.dropna(): # Handle NaN values if any
+            # Split by comma, then strip each resulting part
+            cleaned_parts = [part.strip() for part in tag_string.split(',')]
+            print(f'cleaned_parts: {cleaned_parts}')
+        # Return unique and sorted tags
+        return cleaned_parts
+    
+    # ==================================== Chunk Data ================================
+    def chunk_shopify_csv_by_product(self, input_csv_path, output_directory="shopify_product_chunks_by_handle", products_per_chunk=200):
+        """
+        Reads a Shopify product CSV, chunks it into smaller files ensuring
+        that each file contains complete products (all variants of a handle).
+
+        Args:
+            input_csv_path (str): Path to the input CSV file.
+            output_directory (str): Directory to save the chunked CSV files.
+            products_per_chunk (int): Maximum number of unique products (Handles) per chunk file.
+        """
+
+        if not os.path.exists(output_directory):
+            os.makedirs(output_directory)
+
+        print(f"Reading entire CSV file: {input_csv_path}...")
+        df = pd.read_csv(input_csv_path)
+        print(f"Total rows read: {len(df)}")
+
+        # Get unique handles in order of appearance
+        unique_handles = df['Handle'].unique()
+        print(f"Total unique products (handles): {len(unique_handles)}")
+
+        file_number = 1
+        current_product_count = 0
+        start_index = 0
+        head, tail = os.path.split(input_csv_path)
+        filename_split = tail
+
+        for i, handle in enumerate(unique_handles):
+            rows_for_handle = df[df['Handle'] == handle]
+
+            if current_product_count >= products_per_chunk and i > 0:
+                # Extract the rows for the current chunk
+                chunk_df = df.iloc[start_index : rows_for_handle.index[0]]
+
+                # Define the output path and save
+                # output_filename = os.path.join(output_directory, f"{repr(input_csv_path).split('\\')[-1].split('.')[0]}_{file_number:03d}.csv")
+                output_filename = os.path.join(output_directory, f"{filename_split.split('.')[0]}_{file_number:03d}.csv")
+                chunk_df.to_csv(output_filename, index=False)
+                print(f"Saved {len(chunk_df)} rows ({current_product_count} products) to {output_filename}")
+
+                # Reset for the next chunk
+                file_number += 1
+                current_product_count = 0
+                start_index = rows_for_handle.index[0] # New start is where this handle begins
+
+            current_product_count += 1
+
+        # Save the last remaining chunk
+        if current_product_count > 0:
+            chunk_df = df.iloc[start_index:]
+            # output_filename = os.path.join(output_directory, f"{repr(input_csv_path).split('\\')[-1].split('.')[0]}_{file_number:03d}.csv")
+            output_filename = os.path.join(output_directory, f"{filename_split.split('.')[0]}_{file_number:03d}.csv")
+            chunk_df.to_csv(output_filename, index=False)
+            print(f"Saved {len(chunk_df)} rows ({current_product_count} products) to {output_filename}")
+
+        print(f"\nFinished chunking. Total {file_number} files created in '{output_directory}'.")
 
     # ==================================== CSV to JSONL ================================
-    def csv_to_jsonl(self, csv_file_path, jsonl_file_path, mode):
+    def csv_to_jsonl(self, csv_file_path, jsonl_file_path, mode, locationId=None):
         """
         Converts a CSV file containing Shopify product data into a JSONL format
         suitable for Shopify's bulk import using the GraphQL Admin API.
@@ -110,8 +170,11 @@ class ShopifyApp:
                 'Gift Card': 'first',
                 'SEO Title': 'first',
                 'SEO Description': 'first',
+                'Variant Image': list,
+                'Variant Weight Unit': list,
                 'Cost per item': list,
-                'Status': 'first'
+                'Status': 'first',
+                'Available Qty': list
             }
         ).reset_index()
 
@@ -169,7 +232,6 @@ class ShopifyApp:
                     }
                     media_list.append(media)
                 
-                print(f'media_list:{media_list}')
                 product_entry['media'] = media_list
 
                 datas.append(product_entry)
@@ -184,193 +246,108 @@ class ShopifyApp:
             for index, row in grouped_id_df.iterrows():
                 variants_entry = {
                     'productId': row['id'],
-                    'variants': []
+                    'variants': [],
+                    'strategy': 'REMOVE_STANDALONE_VARIANT'
                 }
 
                 variants = list()
                 
-                for i in range(len(row['Variant SKU'])):
-                    variant = {
-                        'optionValues': []
-                    }
-                    
-                    for j in range(1, 4):
-                        optionValue = {}
-                        option_name_col = f'Option{j} Name'
-                        option_value_col = f'Option{j} Value'
-                        if row[option_name_col] != '':
-                            optionValue['optionName'] = row[option_name_col]
-                        if row[option_value_col] != '':
-                            optionValue['name'] = row[option_value_col][i]
-                        if optionValue['name'] != '':
-                            variant['optionValues'].append(optionValue)
+                for i in range(len(row['Variant SKU']) - 1):
+                    if row['Variant SKU'][i] != '' and row['Variant SKU'][i] is not None:
+                        variant = {
+                            'optionValues': [],
+                            'inventoryItem': {
+                                'sku': row['Variant SKU'][i],
+                                'tracked' : str(row['Variant Inventory Tracker'][i]).strip().lower() == 'shopify',
+                                'requiresShipping': str(row['Variant Requires Shipping'][i]).strip().lower() == 'true',
+                                'cost': float(row['Cost per item'][i]) if row['Cost per item'][i] else 0.0,
+                                'measurement':{
+                                    'weight':{
+                                        # 'unit': str(row['Variant Weight Unit'][i]).strip().upper() if row['Variant Weight Unit'][i] else 'GRAMS',
+                                        'unit': 'GRAMS',
+                                        'value': float(row['Variant Grams'][i]) if row['Variant Grams'][i] else 0.0
+                                    }
+                                }
+                            },
+                            'inventoryPolicy': 'DENY',
+                            'inventoryQuantities': [],
+                            'price': float(row['Variant Price'][i]) if row['Variant Price'][i] else 0.0,
+                            'compareAtPrice': float(row['Variant Compare At Price'][i]) if row['Variant Compare At Price'][i] else None,
+                            'taxable': str(row['Variant Taxable'][i]).strip().lower() == 'true',
+                            'barcode': str(row['Variant Barcode'][i]).strip() if row['Variant Barcode'][i] else '',
+                            'mediaSrc': str(row['Image Src'][i]).strip() if row['Image Src'][i] else ''
+                        }
 
-                    if len(variant['optionValues']) > 0:
+                        # Clean up None values in compareAtPrice
+                        if variant['compareAtPrice'] is None:
+                            del variant['compareAtPrice']
+                        
+                        option_values = []
+                        for j in range(1, 4):
+                            optionValue = {}
+                            option_name_col = f'Option{j} Name'
+                            option_value_col = f'Option{j} Value'
+                            if row[option_name_col] != '':
+                                optionValue['optionName'] = row[option_name_col]
+                            if len(row[option_value_col]) > 0:
+                                optionValue['name'] = row[option_value_col][i]
+                            if optionValue['name'] != '':
+                                if len(optionValue) > 0:
+                                    option_values.append(optionValue)
+                                    
+                        variant['optionValues'] = option_values.copy()
+
+                        quantities = []
+                        for qty in row['Available Qty']: 
+                            if qty != '':
+                                quantity = {
+                                    'availableQuantity': int(qty),
+                                    'locationId': locationId
+                                }
+                            
+                                quantities.append(quantity)
+
+                        variant['inventoryQuantities'] = quantities.copy()
+
                         variants.append(variant)
-                    print(variants)
 
                 variants_entry['variants'] = variants
                 datas.append(variants_entry)
+        
+        if mode == 'publish':
+            handles = grouped_df['Handle'].tolist()
+            response = self.get_products_id_by_handle(handles=handles)
+            edges = response['data']['products']['edges']
+            records = [x['node'] for x in edges]
+            product_id_df = pd.DataFrame.from_records(records)
+            grouped_id_df = pd.merge(grouped_df, product_id_df, how='left', left_on='Handle', right_on='handle')
+            
+            response = self.query_publication()
+            nodes = response['data']['publications']['nodes']
+            publication_ids = [x['id'] for x in nodes]
+            
+            publications = []
+            for publication_id in publication_ids: 
+                publication = {
+                    'publicationId': publication_id
+                }
+            publications.append(publication)
 
-        #     publish_entry = {
-        #         'publish': {
-        #             'published': str(row['Published']).strip().lower() == 'true',
-        #         }
-        #     }
+            for index, row in grouped_id_df.iterrows():
+                if str(row['Published']).strip().lower() == 'true':
+                    publish_entry = {
+                        'id': row['id'],
+                        'input': []
+                    }
+                    publish_entry['input'] = publications
+                    datas.append(publish_entry)
+            
 
         # Write product data to JSONL file
         with open(jsonl_file_path, 'w', encoding='utf-8') as outfile:
             for data in datas:
                 outfile.write(json.dumps(data, ensure_ascii=False) + '\n')
         print(f"Successfully converted '{csv_file_path}' to '{jsonl_file_path}'")
-
-        #     # --- Process Media (Images) ---
-        #     # Collect all unique image sources across all rows for this product
-        #     collected_media_sources = set()
-        #     for _, row in product_rows.iterrows():
-        #         if row['Image Src']:
-        #             image_src = str(row['Image Src']).strip()
-        #             if image_src and image_src not in collected_media_sources:
-        #                 product_entry['media'].append({
-        #                     'originalSource': image_src,
-        #                     'mediaContentType': 'IMAGE'
-        #                     # 'alt': str(row['Image Alt Text']).strip() # Add if Image Alt Text is available and desired
-        #                 })
-        #                 collected_media_sources.add(image_src)
-
-        #     # --- Process Variants ---
-        #     # First, collect all option names from the first row that has them
-        #     option_names_mapping = {}  # Maps option position to option name
-        #     for i in range(1, 4):
-        #         option_name_col = f'Option{i} Name'
-        #         for _, row in product_rows.iterrows():
-        #             if row[option_name_col]:
-        #                 option_names_mapping[i] = str(row[option_name_col]).strip()
-        #                 break  # Take the first non-empty value
-
-        #     # Process each row as a potential variant
-        #     variants_list = []
-        #     processed_skus = set()  # Track processed SKUs to avoid duplicates
-
-        #     for _, row in product_rows.iterrows():
-        #         variant_sku = str(row['Variant SKU']).strip()
-
-        #         # Skip rows that don't have variant data (like image-only rows)
-        #         if not variant_sku:
-        #             continue
-
-        #         # Skip duplicate SKUs (in case of multiple image rows for same variant)
-        #         if variant_sku and variant_sku in processed_skus:
-        #             continue
-
-        #         option_values_for_current_row = []
-
-        #         # First try to get option values from the row itself
-        #         for i in range(1, 4):
-        #             option_name_col = f'Option{i} Name'
-        #             option_value_col = f'Option{i} Value'
-        #             if option_name_col in row and row[option_name_col] and \
-        #                option_value_col in row and row[option_value_col]:
-        #                 option_values_for_current_row.append({
-        #                     'name': str(row[option_value_col]).strip(),
-        #                     'optionName': str(row[option_name_col]).strip()
-        #                 })
-
-        #         # If no option values found in row, try to extract from SKU pattern
-        #         if not option_values_for_current_row and variant_sku:
-        #             # SKU pattern appears to be: basesku-option1-option2-option3
-        #             sku_parts = variant_sku.split('-')
-        #             if len(sku_parts) >= 4:  # base + 3 options
-        #                 option_values_from_sku = sku_parts[1:]  # Skip the base SKU part
-
-        #                 # Map the SKU option values to the actual option names
-        #                 for i, option_value in enumerate(option_values_from_sku[:3], 1):  # Max 3 options
-        #                     if i in option_names_mapping:
-        #                         # Clean up the option value and convert known patterns
-        #                         clean_option_value = option_value.replace('customlicenseplate', 'Custom license plate - $39')
-        #                         clean_option_value = clean_option_value.replace('none', 'None - $0')
-        #                         clean_option_value = clean_option_value.replace('1year', '1 year - $89')
-
-        #                         option_values_for_current_row.append({
-        #                             'name': clean_option_value,
-        #                             'optionName': option_names_mapping[i]
-        #                         })
-
-        #         # Create variant data for this row
-        #         variant_data = {
-        #             'optionValues': option_values_for_current_row,
-        #             'inventoryItem': {
-        #                 'sku': variant_sku,
-        #                 'measurement': {
-        #                     'weight': {
-        #                         'unit': str(row['Variant Weight Unit']).strip().upper() if row['Variant Weight Unit'] else 'GRAMS',
-        #                         'value': float(row['Variant Grams']) if row['Variant Grams'] else 0.0
-        #                     }
-        #                 },
-        #                 'tracked': str(row['Variant Inventory Tracker']).strip().lower() == 'shopify',
-        #                 'requiresShipping': str(row['Variant Requires Shipping']).strip().lower() == 'true',
-        #                 'cost': float(row['Cost per item']) if row['Cost per item'] else 0.0
-        #             },
-        #             'inventoryPolicy': 'DENY',
-        #             'price': float(row['Variant Price']) if row['Variant Price'] else 0.0,
-        #             'compareAtPrice': float(row['Variant Compare At Price']) if row['Variant Compare At Price'] else None,
-        #             'taxable': str(row['Variant Taxable']).strip().lower() == 'true',
-        #             'barcode': str(row['Variant Barcode']).strip() if row['Variant Barcode'] else '',
-        #             'mediaSrc': str(row['Image Src']).strip() if row['Image Src'] else ''
-        #         }
-
-        #         # Clean up None values in compareAtPrice
-        #         if variant_data['compareAtPrice'] is None:
-        #             del variant_data['compareAtPrice']
-
-        #         variants_list.append(variant_data)
-
-        #         # Mark this SKU as processed
-        #         if variant_sku:
-        #             processed_skus.add(variant_sku)
-
-        #     # Add all collected variants to the product entry
-        #     product_entry['variants'] = variants_list
-
-        #     # If after processing all rows, no variants were explicitly found (e.g., very simple product with no SKU/options)
-        #     # Create a default variant if needed. Shopify typically requires at least one variant.
-        #     if not product_entry['variants']:
-        #         # Create a basic default variant using data from the first row of the product
-        #         product_entry['variants'].append({
-        #             'optionValues': [],
-        #             'inventoryItem': {
-        #                 'sku': str(row['Variant SKU']).strip(), # Use SKU from first row if available
-        #                 'measurement': {
-        #                     'weight': {
-        #                         'unit': str(row['Variant Weight Unit']).strip().upper() if row['Variant Weight Unit'] else 'GRAMS',
-        #                         'value': float(row['Variant Grams']) if row['Variant Grams'] else 0.0
-        #                     }
-        #                 },
-        #                 'tracked': str(row['Variant Inventory Tracker']).strip().lower() == 'shopify',
-        #                 'requiresShipping': str(row['Variant Requires Shipping']).strip().lower() == 'true',
-        #                 'cost': float(row['Cost per item']) if row['Cost per item'] else 0.0
-        #             },
-        #             'inventoryPolicy': 'DENY',
-        #             'price': float(row['Variant Price']) if row['Variant Price'] else 0.0,
-        #             'compareAtPrice': float(row['Variant Compare At Price']) if row['Variant Compare At Price'] else None,
-        #             'taxable': str(row['Variant Taxable']).strip().lower() == 'true',
-        #             'barcode': str(row['Variant Barcode']).strip(),
-        #             'mediaSrc': str(row['Image Src']).strip()
-        #         })
-
-        #     products_data[handle] = product_entry
-
-        # # Write to JSONL file
-        # with open(jsonl_file_path, 'w', encoding='utf-8') as outfile:
-        #     for handle, product_data in products_data.items():
-        #         # Final cleanup of empty lists/dicts if desired, though Shopify import handles this.
-        #         if not product_data['productOptions']:
-        #             del product_data['productOptions']
-        #         if not product_data['media']:
-        #             del product_data['media']
-
-        #         outfile.write(json.dumps(product_data, ensure_ascii=False) + '\n')
-        # print(f"Successfully converted '{csv_file_path}' to '{jsonl_file_path}'")
 
     # Create
     # ===================================== Session ====================================
@@ -438,7 +415,7 @@ class ShopifyApp:
             publication_input = [{'publicationId': item['id']} for item in publication_data['data']['publications']['nodes']]
             self.publish_product(product_id=product_data['data']['productCreate']['product']['id'], publication_input=publication_input)
 
-        self.create_variants(product_id=product_data['data']['productCreate']['product']['id'], variants=variables['variants'], media=variables['media'], strategy='REMOVE_STANDALONE_VARIANT')
+        self.create_variant(product_id=product_data['data']['productCreate']['product']['id'], variants=variables['variants'], media=variables['media'], strategy='REMOVE_STANDALONE_VARIANT')
 
     # =================================== staged_target ================================
     def generate_staged_target(self):
@@ -472,9 +449,9 @@ class ShopifyApp:
 
         return self.send_request(query=mutation)
 
-    # ================================== Create Variants ===============================
-    def create_variants(self, product_id, variants, media, strategy='DEFAULT'):
-        print('Creating Variants...')
+    # ================================== Create Variant ===============================
+    def create_variant(self, product_id, variants, media, strategy='DEFAULT'):
+        print('Creating Variant...')
         mutation = '''
             mutation productVariantsBulkCreate($productId: ID!, $variants: [ProductVariantsBulkInput!]!, $media: [CreateMediaInput!], $strategy: ProductVariantsBulkCreateStrategy) {
                 productVariantsBulkCreate(productId: $productId, variants: $variants, media: $media, strategy: $strategy) {
@@ -584,6 +561,38 @@ class ShopifyApp:
         '''
 
         return self.send_request(query=query)
+    
+    # =================================== Locations =================================
+    def query_locations(self):
+        print('Getting location...')
+        query = '''
+            {
+                locations(first: 250) {
+                    nodes{
+                        id
+                        name
+                        activatable
+                        hasActiveInventory
+                        inventoryLevels(first: 250){
+                            nodes{
+                                id
+                                item{
+                                    sku
+                                }
+                                quantities(names: ["available"]){
+                                    id
+                                    name
+                                    quantity
+                                }
+                            }
+                        }
+                        isActive
+                    }
+                }
+            }
+        '''
+
+        return self.send_request(query=query)
 
     # Update
     # ===================================== Publish Product ====================================
@@ -617,6 +626,100 @@ class ShopifyApp:
         }
 
         return self.send_request(query=publish_mutation, variables=publish_variables)
+
+    def publish_products(self, staged_target):
+        print('Publishing products...')
+        mutation = '''
+            mutation ($stagedUploadPath: String!){
+                bulkOperationRunMutation(
+                    mutation: "mutation call($id: ID!, $input: [PublicationInput!]!){
+                        publishablePublish(id: $id, input: $input){
+                            publishable {
+                                availablePublicationsCount {
+                                    count
+                                }
+                                resourcePublicationsCount {
+                                    count
+                                }
+                            }
+                            shop {
+                                publicationCount
+                            }
+                            userErrors {
+                                field
+                                message
+                            }
+                        }
+                    }",
+                    stagedUploadPath: $stagedUploadPath
+                )
+                {
+                    bulkOperation {
+                        id
+                        url
+                        status
+                    }
+                    userErrors {
+                        message
+                        field
+                    }
+                }
+            }
+        '''
+
+        variables = {
+            "stagedUploadPath": staged_target['data']['stagedUploadsCreate']['stagedTargets'][0]['parameters'][3]['value']
+        }
+
+        response = self.send_request(query=mutation, variables=variables)
+
+        return response
+
+    def update_quantities(self, staged_target):
+        print('Set Quantities...')
+        mutation = '''
+            mutation ($stagedUploadPath: String!){
+                bulkOperationRunMutation(
+                    mutation: "mutation call($productId: ID!, $variants: [ProductVariantsBulkInput!]!, $strategy: ProductVariantsBulkCreateStrategy){
+                        productVariantsBulkCreate(productId: $productId, variants: $variants, strategy: $strategy){
+                            product{
+                                handle
+                                id
+                            }
+                            productVariants{
+                                sku
+                                id
+                            }
+                            userErrors {
+                                message
+                                field
+                            } 
+                        }
+                    }",
+                    stagedUploadPath: $stagedUploadPath
+                )
+                {
+                    bulkOperation {
+                        id
+                        url
+                        status
+                    }
+                    userErrors {
+                        message
+                        field
+                    }
+                }
+            }
+        '''
+
+        variables = {
+            "stagedUploadPath": staged_target['data']['stagedUploadsCreate']['stagedTargets'][0]['parameters'][3]['value']
+        }
+
+        response = self.send_request(query=mutation, variables=variables)
+
+        return response
+
 
     # Delete
     # ===================================== Product ====================================
@@ -686,18 +789,15 @@ class ShopifyApp:
 
         response = self.send_request(query=mutation, variables=variables)
 
-        print(response)
-        print('')
-
         return response
     
     def create_variants(self, staged_target):
-        print('Creating products...')
+        print('Creating variants...')
         mutation = '''
             mutation ($stagedUploadPath: String!){
                 bulkOperationRunMutation(
-                    mutation: "mutation call($productId: ID!, $variants: [ProductVariantsBulkInput!]!){
-                        productVariantsBulkCreate(product: $productId, variants: $variants, strategy: REMOVE_STANDALONE_VARIANT){
+                    mutation: "mutation call($productId: ID!, $variants: [ProductVariantsBulkInput!]!, $strategy: ProductVariantsBulkCreateStrategy){
+                        productVariantsBulkCreate(productId: $productId, variants: $variants, strategy: $strategy){
                             product{
                                 handle
                                 id
@@ -733,9 +833,6 @@ class ShopifyApp:
         }
 
         response = self.send_request(query=mutation, variables=variables)
-
-        print(response)
-        print('')
 
         return response
 
@@ -801,29 +898,44 @@ class ShopifyApp:
 
         return self.send_request(query=query)
 
-    def import_bulk_data(self, csv_file_path, jsonl_file_path):
+    def import_bulk_data(self, csv_file_path, jsonl_file_path, locationId):
+        print(f'Importing product from file {csv_file_path}')
         # Create products
-        # self.csv_to_jsonl(csv_file_path=csv_file_path, jsonl_file_path=jsonl_file_path, mode='product')
-        # staged_target = self.generate_staged_target()
-        # self.upload_jsonl(staged_target=staged_target, jsonl_path=jsonl_file_path)
-        # self.create_products(staged_target=staged_target)
-        # completed = False
-        # while not completed:
-        #     time.sleep(60)
-        #     response = self.pool_operation_status()
-        #     if response['data']['status'] == 'COMPLETED':
-        #         completed = True
+        self.csv_to_jsonl(csv_file_path=csv_file_path, jsonl_file_path=jsonl_file_path, mode='product')
+        staged_target = self.generate_staged_target()
+        self.upload_jsonl(staged_target=staged_target, jsonl_path=jsonl_file_path)
+        self.create_products(staged_target=staged_target)
+        completed = False
+        while not completed:
+            time.sleep(10)
+            response = self.pool_operation_status()
+            if response['data']['currentBulkOperation']['status'] == 'COMPLETED':
+                completed = True
+
         # Create variants
-        self.csv_to_jsonl(csv_file_path=csv_file_path, jsonl_file_path=jsonl_file_path, mode='variant')
-        # staged_target = self.generate_staged_target()
-        # self.upload_jsonl(staged_target=staged_target, jsonl_path=jsonl_file_path)
-        # self.create_products(staged_target=staged_target)
-        # completed = False
-        # while not completed:
-        #     time.sleep(60)
-        #     response = self.pool_operation_status()
-        #     if response['data']['status'] == 'COMPLETED':
-        #         completed = True
+        self.csv_to_jsonl(csv_file_path=csv_file_path, jsonl_file_path=jsonl_file_path, mode='variant', locationId=locationId)
+        staged_target = self.generate_staged_target()
+        self.upload_jsonl(staged_target=staged_target, jsonl_path=jsonl_file_path)
+        self.create_variants(staged_target=staged_target)
+        completed = False
+        while not completed:
+            time.sleep(10)
+            response = self.pool_operation_status()
+            if response['data']['currentBulkOperation']['status'] == 'COMPLETED':
+                completed = True
+
+        # Publish product
+        self.csv_to_jsonl(csv_file_path=csv_file_path, jsonl_file_path=jsonl_file_path, mode='publish')
+        staged_target = self.generate_staged_target()
+        self.upload_jsonl(staged_target=staged_target, jsonl_path=jsonl_file_path)
+        self.publish_products(staged_target=staged_target)
+        completed = False
+        while not completed:
+            time.sleep(10)
+            response = self.pool_operation_status()
+            if response['data']['currentBulkOperation']['status'] == 'COMPLETED':
+                completed = True
+
         print('Product import is completed')
 
     def create_collection(self, client):
@@ -935,7 +1047,7 @@ class ShopifyApp:
 
 
 if __name__ == '__main__':
-    # Example
+    # Usage
     load_dotenv()
 
     # ============================== Create Session ====================================
@@ -954,6 +1066,9 @@ if __name__ == '__main__':
 
     # ============================== Query Publications ================================
     # s.query_publication()
+
+    # ============================== Query Locations ================================
+    # s.query_locations()
 
     # ================================ Create Product ==================================
     # variables = {
@@ -1154,21 +1269,25 @@ if __name__ == '__main__':
     # s.get_products_id_by_handle(handles=handles)
 
     # ================================= CSV to JSONL ==================================
-    # s.csv_to_jsonl(csv_file_path='data/test.csv', jsonl_file_path='./data/product_bulk_op_vars.jsonl')
+    # s.csv_to_jsonl(csv_file_path='./data/sample.csv', jsonl_file_path='./data/bulk_op_vars.jsonl', mode='variant', locationId='gid://shopify/Location/76200411326')
 
     # ================================= Staged Target ==================================
     # staged_target = s.generate_staged_target()
 
-    # ================================= Upload JSONL ==================================
+    # ================================= Upload JSONL ===================================
     # s.upload_jsonl(staged_target=staged_target, jsonl_path="./data/product_bulk_op_vars.jsonl")
 
     # create_products_flag = input('Press any key to continue')
 
-    # =============================== bulk create products =============================
+    # =============================== Bulk Create Products =============================
     # s.create_products(staged_target=staged_target)
 
+    # ==================================== Chunk Data ==================================
+    # s.chunk_shopify_csv_by_product(input_csv_path='./data/products_export_2.csv', output_directory='./data/chunked', products_per_chunk=200)
+    
+
     # =============================== bulk import products =============================
-    s.import_bulk_data(csv_file_path='./data/test.csv', jsonl_file_path='./data/bulk_op_vars.jsonl')
+    s.import_bulk_data(csv_file_path='./data/sample.csv', jsonl_file_path='./data/bulk_op_vars.jsonl', locationId='gid://shopify/Location/76200411326')
 
     # ============================== pull operation status =============================
     # stopper = '0'
@@ -1180,6 +1299,5 @@ if __name__ == '__main__':
     # s.webhook_subscription()
 
     # s.create_collection(client)
-    # s.get_publications(client)
     # s.get_collections(client)
     # print(s.check_bulk_operation_status(client, bulk_operation_id='gid://shopify/BulkOperation/3252439023930'))
