@@ -228,10 +228,10 @@ class ShopifyApp:
 
                 metafields = []
                 if row['Vendor SKU']:
-                    vendorSKU = {'namespace': 'custom', 'key': 'vendor_sku', 'value': row['Vendor SKU']}
+                    vendorSKU = {'namespace': 'custom', 'key': 'vendor_sku', 'value': row['Vendor SKU'], 'type': 'single_line_text_field'}
                     metafields.append(vendorSKU)
                 if row['enable_best_price (product.metafields.custom.enable_best_price)']:
-                    enableBestPrice = {'namespace': 'custom', 'key': 'enable_best_price', 'value': row['enable_best_price (product.metafields.custom.enable_best_price)']}
+                    enableBestPrice = {'namespace': 'custom', 'key': 'enable_best_price', 'value': row['enable_best_price (product.metafields.custom.enable_best_price)'], 'type': 'boolean'}
                     metafields.append(enableBestPrice)
                 product_entry['product']['metafields'] = metafields
 
@@ -922,7 +922,7 @@ class ShopifyApp:
         self.create_products(staged_target=staged_target)
         completed = False
         while not completed:
-            time.sleep(10)
+            time.sleep(3)
             response = self.pool_operation_status()
             if response['data']['currentBulkOperation']['status'] == 'COMPLETED':
                 completed = True
@@ -934,7 +934,7 @@ class ShopifyApp:
         self.create_variants(staged_target=staged_target)
         completed = False
         while not completed:
-            time.sleep(10)
+            time.sleep(3)
             response = self.pool_operation_status()
             if response['data']['currentBulkOperation']['status'] == 'COMPLETED':
                 completed = True
@@ -946,7 +946,7 @@ class ShopifyApp:
         self.publish_products(staged_target=staged_target)
         completed = False
         while not completed:
-            time.sleep(10)
+            time.sleep(3)
             response = self.pool_operation_status()
             if response['data']['currentBulkOperation']['status'] == 'COMPLETED':
                 completed = True
@@ -1068,7 +1068,8 @@ if __name__ == '__main__':
     # ============================== Create Session ====================================
     s = ShopifyApp(
         store_name=os.getenv('STORE_NAME'),
-        access_token=os.getenv('ACCESS_TOKEN')
+        access_token=os.getenv('ACCESS_TOKEN'),
+        api_version=os.getenv('SHOPIFY_API_VERSION')
     )
 
     s.create_session()
@@ -1290,7 +1291,7 @@ if __name__ == '__main__':
     # staged_target = s.generate_staged_target()
 
     # ================================= Upload JSONL ===================================
-    # s.upload_jsonl(staged_target=staged_target, jsonl_path="./data/product_bulk_op_vars.jsonl")
+    # s.upload_jsonl(staged_target=staged_target, jsonl_path="./data/bulk_op_vars.jsonl")
 
     # create_products_flag = input('Press any key to continue')
 
@@ -1301,7 +1302,8 @@ if __name__ == '__main__':
     # s.chunk_shopify_csv_by_product(input_csv_path='./data/products_export_2.csv', output_directory='./data/chunked', products_per_chunk=200)
     
     # =============================== bulk import products =============================
-    s.import_bulk_data(csv_file_path='./data/sample.csv', jsonl_file_path='./data/bulk_op_vars.jsonl', locationId='gid://shopify/Location/76200411326')
+    s.import_bulk_data(csv_file_path='./data/sample(in).csv', jsonl_file_path='./data/bulk_op_vars.jsonl', locationId='gid://shopify/Location/76200411326')
+    # s.import_bulk_data(csv_file_path='./data/sample(in).csv', jsonl_file_path='./data/bulk_op_vars.jsonl', locationId='gid://shopify/Location/47387978') # prod
 
     # ============================== pull operation status =============================
     # stopper = '0'
