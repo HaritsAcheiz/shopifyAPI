@@ -174,7 +174,9 @@ class ShopifyApp:
                 'Variant Weight Unit': list,
                 'Cost per item': list,
                 'Status': 'first',
-                'Available Qty': list
+                'Available Qty': list,
+                'Vendor SKU': 'first',
+                'enable_best_price (product.metafields.custom.enable_best_price)': 'first'
             }
         ).reset_index()
 
@@ -196,7 +198,8 @@ class ShopifyApp:
                             'title': str(row['SEO Title']).strip() if row['SEO Title'] else '',
                             'description': str(row['SEO Description']).strip() if row['SEO Description'] else ''
                         },
-                        'status': str(row['Status']).strip().upper() if row['Status'] else 'ACTIVE'
+                        'status': str(row['Status']).strip().upper() if row['Status'] else 'ACTIVE',
+                        'metafields': []
                     },
                     'media': []
                 }
@@ -220,8 +223,17 @@ class ShopifyApp:
                             productOption['values'].append({'name': item})
                     if productOption['name'] != '':
                         productOptions.append(productOption)
-                
+
                 product_entry['product']['productOptions'] = productOptions
+
+                metafields = []
+                if row['Vendor SKU']:
+                    vendorSKU = {'namespace': 'custom', 'key': 'vendor_sku', 'value': row['Vendor SKU']}
+                    metafields.append(vendorSKU)
+                if row['enable_best_price (product.metafields.custom.enable_best_price)']:
+                    enableBestPrice = {'namespace': 'custom', 'key': 'enable_best_price', 'value': row['enable_best_price (product.metafields.custom.enable_best_price)']}
+                    metafields.append(enableBestPrice)
+                product_entry['product']['metafields'] = metafields
 
                 media_list = list()
                 for i in range(len(row['Image Src'])): 
