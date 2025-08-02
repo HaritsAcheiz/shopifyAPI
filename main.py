@@ -175,7 +175,8 @@ class ShopifyApp:
                 'Cost per item': list,
                 'Status': 'first',
                 'Available Qty': list,
-                'Vendor SKU': 'first'
+                'Vendor SKU': 'first',
+                'enable_best_price (product.metafields.custom.enable_best_price)': 'first'
             }
         ).reset_index()
 
@@ -229,6 +230,9 @@ class ShopifyApp:
                 if row['Vendor SKU']:
                     vendorSKU = {'namespace': 'custom', 'key': 'vendor_sku', 'value': row['Vendor SKU']}
                     metafields.append(vendorSKU)
+                if row['enable_best_price (product.metafields.custom.enable_best_price)']:
+                    enableBestPrice = {'namespace': 'custom', 'key': 'enable_best_price', 'value': row['enable_best_price (product.metafields.custom.enable_best_price)']}
+                    metafields.append(enableBestPrice)
                 product_entry['product']['metafields'] = metafields
 
                 media_list = list()
@@ -1295,7 +1299,7 @@ if __name__ == '__main__':
     
 
     # =============================== bulk import products =============================
-    s.import_bulk_data(csv_file_path='./data/import_Shopify_FINAL.csv', jsonl_file_path='./data/bulk_op_vars.jsonl', locationId='gid://shopify/Location/76200411326')
+    s.import_bulk_data(csv_file_path='./data/sample.csv', jsonl_file_path='./data/bulk_op_vars.jsonl', locationId='gid://shopify/Location/76200411326')
 
     # ============================== pull operation status =============================
     # stopper = '0'
