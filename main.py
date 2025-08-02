@@ -174,7 +174,8 @@ class ShopifyApp:
                 'Variant Weight Unit': list,
                 'Cost per item': list,
                 'Status': 'first',
-                'Available Qty': list
+                'Available Qty': list,
+                'Vendor SKU': 'first'
             }
         ).reset_index()
 
@@ -196,7 +197,8 @@ class ShopifyApp:
                             'title': str(row['SEO Title']).strip() if row['SEO Title'] else '',
                             'description': str(row['SEO Description']).strip() if row['SEO Description'] else ''
                         },
-                        'status': str(row['Status']).strip().upper() if row['Status'] else 'ACTIVE'
+                        'status': str(row['Status']).strip().upper() if row['Status'] else 'ACTIVE',
+                        'metafields': []
                     },
                     'media': []
                 }
@@ -220,8 +222,14 @@ class ShopifyApp:
                             productOption['values'].append({'name': item})
                     if productOption['name'] != '':
                         productOptions.append(productOption)
-                
+
                 product_entry['product']['productOptions'] = productOptions
+
+                metafields = []
+                if row['Vendor SKU']:
+                    vendorSKU = {'namespace': 'custom', 'key': 'vendor_sku', 'value': row['Vendor SKU']}
+                    metafields.append(vendorSKU)
+                product_entry['product']['metafields'] = metafields
 
                 media_list = list()
                 for i in range(len(row['Image Src'])): 
@@ -1287,7 +1295,7 @@ if __name__ == '__main__':
     
 
     # =============================== bulk import products =============================
-    s.import_bulk_data(csv_file_path='./data/sample.csv', jsonl_file_path='./data/bulk_op_vars.jsonl', locationId='gid://shopify/Location/76200411326')
+    s.import_bulk_data(csv_file_path='./data/import_Shopify_FINAL.csv', jsonl_file_path='./data/bulk_op_vars.jsonl', locationId='gid://shopify/Location/76200411326')
 
     # ============================== pull operation status =============================
     # stopper = '0'
