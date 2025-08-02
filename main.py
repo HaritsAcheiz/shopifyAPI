@@ -242,7 +242,8 @@ class ShopifyApp:
                         'mediaContentType': 'IMAGE',
                         'originalSource': str(row['Image Src'][i]).strip() if row['Image Src'][i] else ''
                     }
-                    media_list.append(media)
+                    if media['originalSource'] != '' and media['originalSource'] not in media_list:
+                        media_list.append(media)
                 
                 product_entry['media'] = media_list
 
@@ -263,9 +264,11 @@ class ShopifyApp:
                 }
 
                 variants = list()
-                
+
                 for i in range(len(row['Variant SKU']) - 1):
                     if row['Variant SKU'][i] != '' and row['Variant SKU'][i] is not None:
+                        listMediaSrc = list()
+                        listMediaSrc.append(str(row['Variant Image'][i]).strip() if row['Variant Image'][i] else ''),
                         variant = {
                             'optionValues': [],
                             'inventoryItem': {
@@ -287,7 +290,7 @@ class ShopifyApp:
                             'compareAtPrice': float(row['Variant Compare At Price'][i]) if row['Variant Compare At Price'][i] else None,
                             'taxable': str(row['Variant Taxable'][i]).strip().lower() == 'true',
                             'barcode': str(row['Variant Barcode'][i]).strip() if row['Variant Barcode'][i] else '',
-                            'mediaSrc': str(row['Image Src'][i]).strip() if row['Image Src'][i] else ''
+                            'mediaSrc': listMediaSrc
                         }
 
                         # Clean up None values in compareAtPrice
@@ -1297,7 +1300,6 @@ if __name__ == '__main__':
     # ==================================== Chunk Data ==================================
     # s.chunk_shopify_csv_by_product(input_csv_path='./data/products_export_2.csv', output_directory='./data/chunked', products_per_chunk=200)
     
-
     # =============================== bulk import products =============================
     s.import_bulk_data(csv_file_path='./data/sample.csv', jsonl_file_path='./data/bulk_op_vars.jsonl', locationId='gid://shopify/Location/76200411326')
 
