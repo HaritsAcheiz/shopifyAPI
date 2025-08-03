@@ -201,7 +201,7 @@ class ShopifyApp:
                         'status': str(row['Status']).strip().upper() if row['Status'] else 'ACTIVE',
                         'metafields': []
                     },
-                    'media': []
+                    # 'media': []
                 }
 
                 # --- Process Product Options (Gather all unique options and their values for this product) ---
@@ -228,24 +228,12 @@ class ShopifyApp:
 
                 metafields = []
                 if row['Vendor SKU']:
-                    vendorSKU = {'namespace': 'custom', 'key': 'vendor_sku', 'value': row['Vendor SKU']}
+                    vendorSKU = {'namespace': 'custom', 'key': 'vendor_sku', 'value': row['Vendor SKU'], 'type': 'single_line_text_field'}
                     metafields.append(vendorSKU)
                 if row['enable_best_price (product.metafields.custom.enable_best_price)']:
-                    enableBestPrice = {'namespace': 'custom', 'key': 'enable_best_price', 'value': row['enable_best_price (product.metafields.custom.enable_best_price)']}
+                    enableBestPrice = {'namespace': 'custom', 'key': 'enable_best_price', 'value': row['enable_best_price (product.metafields.custom.enable_best_price)'], 'type': 'boolean'}
                     metafields.append(enableBestPrice)
                 product_entry['product']['metafields'] = metafields
-
-                media_list = list()
-                for i in range(len(row['Image Src'])): 
-                    media = {
-                        # 'alt': str(row['Image Alt Text'][i]).strip() if row['Image Alt Text'][i] else '',
-                        'mediaContentType': 'IMAGE',
-                        'originalSource': str(row['Image Src'][i]).strip() if row['Image Src'][i] else ''
-                    }
-                    if media['originalSource'] != '' and media['originalSource'] not in media_list:
-                        media_list.append(media)
-                
-                product_entry['media'] = media_list
 
                 datas.append(product_entry)
 
@@ -258,6 +246,7 @@ class ShopifyApp:
             grouped_id_df = pd.merge(grouped_df, product_id_df, how='left', left_on='Handle', right_on='handle')
             for index, row in grouped_id_df.iterrows():
                 variants_entry = {
+                    'media': [],
                     'productId': row['id'],
                     'variants': [],
                     'strategy': 'REMOVE_STANDALONE_VARIANT'
@@ -327,6 +316,18 @@ class ShopifyApp:
                         variants.append(variant)
 
                 variants_entry['variants'] = variants
+                
+                media_list = list()
+                for i in range(len(row['Image Src'])): 
+                    media = {
+                        # 'alt': str(row['Image Alt Text'][i]).strip() if row['Image Alt Text'][i] else '',
+                        'mediaContentType': 'IMAGE',
+                        'originalSource': str(row['Image Src'][i]).strip() if row['Image Src'][i] else ''
+                    }
+                    if media['originalSource'] != '' and media['originalSource'] not in media_list:
+                        media_list.append(media)
+                
+                variants_entry['media'] = media_list          
                 datas.append(variants_entry)
         
         if mode == 'publish':
@@ -549,6 +550,16 @@ class ShopifyApp:
                         node {
                             handle
                             id
+                            variants(first: 100){
+                                nodes{
+                                    sku
+                                    media(first: 1){
+                                        nodes{
+                                            id
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                     pageInfo {
@@ -734,6 +745,51 @@ class ShopifyApp:
         response = self.send_request(query=mutation, variables=variables)
 
         return response
+    
+    def update_variants(self, staged_target):
+        print('Update Variants...')
+        mutation = '''
+            mutation ($stagedUploadPath: String!){
+                bulkOperationRunMutation(
+                    mutation: "mutation call($productId: ID!, $variants: [ProductVariantsBulkInput!]!){
+                        productVariantsBulkUpdate(productId: $productId, variants: $variants){
+                            product{
+                                handle
+                                id
+                            }
+                            productVariants{
+                                sku
+                                id
+                            }
+                            userErrors {
+                                message
+                                field
+                            } 
+                        }
+                    }",
+                    stagedUploadPath: $stagedUploadPath
+                )
+                {
+                    bulkOperation {
+                        id
+                        url
+                        status
+                    }
+                    userErrors {
+                        message
+                        field
+                    }
+                }
+            }
+        '''
+
+        variables = {
+            "stagedUploadPath": staged_target['data']['stagedUploadsCreate']['stagedTargets'][0]['parameters'][3]['value']
+        }
+
+        response = self.send_request(query=mutation, variables=variables)
+
+        return response
 
 
     # Delete
@@ -811,8 +867,8 @@ class ShopifyApp:
         mutation = '''
             mutation ($stagedUploadPath: String!){
                 bulkOperationRunMutation(
-                    mutation: "mutation call($productId: ID!, $variants: [ProductVariantsBulkInput!]!, $strategy: ProductVariantsBulkCreateStrategy){
-                        productVariantsBulkCreate(productId: $productId, variants: $variants, strategy: $strategy){
+                    mutation: "mutation call($productId: ID!, $variants: [ProductVariantsBulkInput!]!, $strategy: ProductVariantsBulkCreateStrategy, $media: [CreateMediaInput!]){
+                        productVariantsBulkCreate(productId: $productId, variants: $variants, strategy: $strategy, media: $media){
                             product{
                                 handle
                                 id
@@ -922,7 +978,7 @@ class ShopifyApp:
         self.create_products(staged_target=staged_target)
         completed = False
         while not completed:
-            time.sleep(10)
+            time.sleep(3)
             response = self.pool_operation_status()
             if response['data']['currentBulkOperation']['status'] == 'COMPLETED':
                 completed = True
@@ -934,7 +990,7 @@ class ShopifyApp:
         self.create_variants(staged_target=staged_target)
         completed = False
         while not completed:
-            time.sleep(10)
+            time.sleep(3)
             response = self.pool_operation_status()
             if response['data']['currentBulkOperation']['status'] == 'COMPLETED':
                 completed = True
@@ -946,7 +1002,7 @@ class ShopifyApp:
         self.publish_products(staged_target=staged_target)
         completed = False
         while not completed:
-            time.sleep(10)
+            time.sleep(3)
             response = self.pool_operation_status()
             if response['data']['currentBulkOperation']['status'] == 'COMPLETED':
                 completed = True
@@ -1068,7 +1124,8 @@ if __name__ == '__main__':
     # ============================== Create Session ====================================
     s = ShopifyApp(
         store_name=os.getenv('STORE_NAME'),
-        access_token=os.getenv('ACCESS_TOKEN')
+        access_token=os.getenv('ACCESS_TOKEN'),
+        api_version=os.getenv('SHOPIFY_API_VERSION')
     )
 
     s.create_session()
@@ -1280,17 +1337,17 @@ if __name__ == '__main__':
     # s.delete_products_by_handle(handles=handles)
 
     # =========================== Get Product Id By Handle ============================
-    # handles = ['christmas-gift-electric-ride-on-toy-car-for-kids-12v-battery-powered-with-remote-control']
+    # handles = ['1-seaters-ride-on-car-truck-battery-power-kids-electric-car-with-remote-12v-12709']
     # s.get_products_id_by_handle(handles=handles)
 
     # ================================= CSV to JSONL ==================================
-    # s.csv_to_jsonl(csv_file_path='./data/sample.csv', jsonl_file_path='./data/bulk_op_vars.jsonl', mode='variant', locationId='gid://shopify/Location/76200411326')
+    # s.csv_to_jsonl(csv_file_path='./data/sample(in).csv', jsonl_file_path='./data/bulk_op_vars.jsonl', mode='create_variant', locationId='gid://shopify/Location/76200411326')
 
     # ================================= Staged Target ==================================
     # staged_target = s.generate_staged_target()
 
     # ================================= Upload JSONL ===================================
-    # s.upload_jsonl(staged_target=staged_target, jsonl_path="./data/product_bulk_op_vars.jsonl")
+    # s.upload_jsonl(staged_target=staged_target, jsonl_path="./data/bulk_op_vars.jsonl")
 
     # create_products_flag = input('Press any key to continue')
 
@@ -1301,7 +1358,8 @@ if __name__ == '__main__':
     # s.chunk_shopify_csv_by_product(input_csv_path='./data/products_export_2.csv', output_directory='./data/chunked', products_per_chunk=200)
     
     # =============================== bulk import products =============================
-    s.import_bulk_data(csv_file_path='./data/sample.csv', jsonl_file_path='./data/bulk_op_vars.jsonl', locationId='gid://shopify/Location/76200411326')
+    s.import_bulk_data(csv_file_path='./data/sample(in).csv', jsonl_file_path='./data/bulk_op_vars.jsonl', locationId='gid://shopify/Location/76200411326')
+    # s.import_bulk_data(csv_file_path='./data/sample(in).csv', jsonl_file_path='./data/bulk_op_vars.jsonl', locationId='gid://shopify/Location/47387978') # prod
 
     # ============================== pull operation status =============================
     # stopper = '0'
