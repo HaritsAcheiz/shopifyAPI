@@ -347,7 +347,7 @@ class ShopifyApp:
                 publication = {
                     'publicationId': publication_id
                 }
-            publications.append(publication)
+                publications.append(publication)
 
             for index, row in grouped_id_df.iterrows():
                 if str(row['Published']).strip().lower() == 'true':
@@ -1119,7 +1119,7 @@ class ShopifyApp:
 
 if __name__ == '__main__':
     # Usage
-    load_dotenv()
+    load_dotenv('./.prd.env')
 
     # ============================== Create Session ====================================
     s = ShopifyApp(
@@ -1137,7 +1137,7 @@ if __name__ == '__main__':
     # s.query_products()
 
     # ============================== Query Publications ================================
-    # s.query_publication()
+    s.query_publication()
 
     # ============================== Query Locations ================================
     # s.query_locations()
@@ -1358,8 +1358,8 @@ if __name__ == '__main__':
     # s.chunk_shopify_csv_by_product(input_csv_path='./data/products_export_2.csv', output_directory='./data/chunked', products_per_chunk=200)
     
     # =============================== bulk import products =============================
-    s.import_bulk_data(csv_file_path='./data/sample(in).csv', jsonl_file_path='./data/bulk_op_vars.jsonl', locationId='gid://shopify/Location/76200411326')
-    # s.import_bulk_data(csv_file_path='./data/sample(in).csv', jsonl_file_path='./data/bulk_op_vars.jsonl', locationId='gid://shopify/Location/47387978') # prod
+    # s.import_bulk_data(csv_file_path='./data/import200.csv', jsonl_file_path='./data/bulk_op_vars.jsonl', locationId='gid://shopify/Location/76200411326')
+    s.import_bulk_data(csv_file_path='./data/prod_test.csv', jsonl_file_path='./data/bulk_op_vars.jsonl', locationId='gid://shopify/Location/47387978') # prod
 
     # ============================== pull operation status =============================
     # stopper = '0'
