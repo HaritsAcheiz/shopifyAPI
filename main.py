@@ -320,7 +320,6 @@ class ShopifyApp:
                 media_list = list()
                 for i in range(len(row['Image Src'])): 
                     media = {
-                        # 'alt': str(row['Image Alt Text'][i]).strip() if row['Image Alt Text'][i] else '',
                         'mediaContentType': 'IMAGE',
                         'originalSource': str(row['Image Src'][i]).strip() if row['Image Src'][i] else ''
                     }
@@ -357,7 +356,6 @@ class ShopifyApp:
                     }
                     publish_entry['input'] = publications
                     datas.append(publish_entry)
-            
 
         # Write product data to JSONL file
         with open(jsonl_file_path, 'w', encoding='utf-8') as outfile:
@@ -369,7 +367,7 @@ class ShopifyApp:
     # ===================================== Session ====================================
     def create_session(self):
         print("Creating session...")
-        client = Client()
+        client = Client(timeout=12)
         headers = {
             'X-Shopify-Access-Token': self.access_token,
             'Content-Type': 'application/json'
@@ -550,12 +548,30 @@ class ShopifyApp:
                         node {
                             handle
                             id
-                            variants(first: 100){
+                            title
+                            variants(first: 30){
                                 nodes{
                                     sku
                                     media(first: 1){
                                         nodes{
                                             id
+                                            alt
+                                            preview{
+                                                image{
+                                                    url
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            media(first: 30){
+                                nodes{
+                                    id
+                                    alt
+                                    preview{
+                                        image{
+                                            url
                                         }
                                     }
                                 }
@@ -791,6 +807,73 @@ class ShopifyApp:
 
         return response
 
+    # =========================== Update Files By Ids ============================
+    def update_files(self, file_variables):
+        """
+        file_variables format [
+            {
+                "id": id,
+                "filename": filename,
+                "alt": alt 
+            }
+        ]
+        """
+        print('Updating Files...')
+        file_mutation = '''
+            mutation fileUpdate($files: [FileUpdateInput!]!) {
+                fileUpdate(files: $files) {
+                    files {
+                        id
+                        fileStatus
+                    }
+                    userErrors {
+                        field
+                        message
+                    }
+                }
+            }
+        '''
+
+        return self.send_request(query=file_mutation, variables=file_variables)
+
+    def update_files_for_import(self, csv_file_path):
+        df = pd.read_csv(csv_file_path)
+        handles = df['Handle'].unique().tolist()
+        print(handles)
+        product_response = s.get_products_id_by_handle(handles=handles)
+        edges = product_response['data']['products']['edges']
+        files = list()
+        for i, edge in enumerate(edges):
+            for j, variant in enumerate(edge['node']['variants']['nodes']):
+                for k, variant_media in enumerate(variant['media']['nodes']):
+                    variant_file = {
+                        'id': variant_media['id'],
+                        'alt': edge['node']['title'] + ' ' + 'v' + str(j),
+                        'url': variant_media['preview']['image']['url']
+                    }
+                    files.append(variant_file)
+                    
+            for l, media in enumerate(edge['node']['media']['nodes']):
+                media_file = {
+                    'id': media['id'],
+                    'alt': edge['node']['title'] + ' ' + 'm' + str(l),
+                    'url': media['preview']['image']['url']
+                }
+                files.append(media_file)
+
+        file_list = list()
+        for file in files:
+            file_variable = {
+                "id": file['id'],
+                "filename": file['alt'].lower().replace(' ', '-').replace(',', '') + '.' + file['url'].split('.')[-1].split("?")[0],
+                "alt": file['alt']
+            }
+            file_list.append(file_variable)
+
+        file_variables = {'files': file_list}
+
+        self.update_files(file_variables)
+
 
     # Delete
     # ===================================== Product ====================================
@@ -995,6 +1078,9 @@ class ShopifyApp:
             if response['data']['currentBulkOperation']['status'] == 'COMPLETED':
                 completed = True
 
+        # Update Files
+        self.update_files_for_import(csv_file_path)
+
         # Publish product
         self.csv_to_jsonl(csv_file_path=csv_file_path, jsonl_file_path=jsonl_file_path, mode='publish')
         staged_target = self.generate_staged_target()
@@ -1119,7 +1205,7 @@ class ShopifyApp:
 
 if __name__ == '__main__':
     # Usage
-    load_dotenv('./.prd.env')
+    load_dotenv()
 
     # ============================== Create Session ====================================
     s = ShopifyApp(
@@ -1137,7 +1223,7 @@ if __name__ == '__main__':
     # s.query_products()
 
     # ============================== Query Publications ================================
-    s.query_publication()
+    # s.query_publication()
 
     # ============================== Query Locations ================================
     # s.query_locations()
@@ -1340,8 +1426,44 @@ if __name__ == '__main__':
     # handles = ['1-seaters-ride-on-car-truck-battery-power-kids-electric-car-with-remote-12v-12709']
     # s.get_products_id_by_handle(handles=handles)
 
+    # ============================== Update Files by IDs ===============================
+    # handles = ['1-seaters-ride-on-car-truck-battery-power-kids-electric-car-with-remote-12v-12709']
+    # product_response = s.get_products_id_by_handle(handles=handles)
+    # edges = product_response['data']['products']['edges']
+    # files = list()
+    # for i, edge in enumerate(edges):
+    #     for j, variant in enumerate(edge['node']['variants']['nodes']):
+    #         for k, variant_media in enumerate(variant['media']['nodes']):
+    #             variant_file = {
+    #                 'id': variant_media['id'],
+    #                 'alt': edge['node']['title'] + ' ' + 'v' + str(j),
+    #                 'url': variant_media['preview']['image']['url']
+    #             }
+    #             files.append(variant_file)
+                
+    #     for l, media in enumerate(edge['node']['media']['nodes']):
+    #         media_file = {
+    #             'id': media['id'],
+    #             'alt': edge['node']['title'] + ' ' + 'm' + str(l),
+    #             'url': media['preview']['image']['url']
+    #         }
+    #         files.append(media_file)
+
+    # file_list = list()
+    # for file in files:
+    #     file_variable = {
+    #         "id": file['id'],
+    #         "filename": file['alt'].lower().replace(' ', '-').replace(',', '') + '.' + file['url'].split('.')[-1].split("?")[0],
+    #         "alt": file['alt']
+    #     }
+    #     file_list.append(file_variable)
+
+    # file_variables = {'files': file_list}
+
+    # s.update_files(file_variables)
+
     # ================================= CSV to JSONL ==================================
-    # s.csv_to_jsonl(csv_file_path='./data/sample(in).csv', jsonl_file_path='./data/bulk_op_vars.jsonl', mode='create_variant', locationId='gid://shopify/Location/76200411326')
+    # s.csv_to_jsonl(csv_file_path='./data/sample(in).csv', jsonl_file_path='./data/bulk_op_vars.jsonl', mode='variant', locationId='gid://shopify/Location/76200411326')
 
     # ================================= Staged Target ==================================
     # staged_target = s.generate_staged_target()
@@ -1358,8 +1480,8 @@ if __name__ == '__main__':
     # s.chunk_shopify_csv_by_product(input_csv_path='./data/products_export_2.csv', output_directory='./data/chunked', products_per_chunk=200)
     
     # =============================== bulk import products =============================
-    # s.import_bulk_data(csv_file_path='./data/import200.csv', jsonl_file_path='./data/bulk_op_vars.jsonl', locationId='gid://shopify/Location/76200411326')
-    s.import_bulk_data(csv_file_path='./data/prod_test.csv', jsonl_file_path='./data/bulk_op_vars.jsonl', locationId='gid://shopify/Location/47387978') # prod
+    s.import_bulk_data(csv_file_path='./data/prod_test.csv', jsonl_file_path='./data/bulk_op_vars.jsonl', locationId='gid://shopify/Location/76200411326')
+    # s.import_bulk_data(csv_file_path='./data/prod_test.csv', jsonl_file_path='./data/bulk_op_vars.jsonl', locationId='gid://shopify/Location/47387978') # prod
 
     # ============================== pull operation status =============================
     # stopper = '0'
