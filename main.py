@@ -1053,33 +1053,30 @@ class ShopifyApp:
         return self.send_request(query=query)
 
     def import_bulk_data(self, csv_file_path, jsonl_file_path, locationId):
-        print(f'Importing product from file {csv_file_path}')
-        # Create products
-        self.csv_to_jsonl(csv_file_path=csv_file_path, jsonl_file_path=jsonl_file_path, mode='product')
-        staged_target = self.generate_staged_target()
-        self.upload_jsonl(staged_target=staged_target, jsonl_path=jsonl_file_path)
-        self.create_products(staged_target=staged_target)
-        completed = False
-        while not completed:
-            time.sleep(3)
-            response = self.pool_operation_status()
-            if response['data']['currentBulkOperation']['status'] == 'COMPLETED':
-                completed = True
+        # print(f'Importing product from file {csv_file_path}')
+        # # Create products
+        # self.csv_to_jsonl(csv_file_path=csv_file_path, jsonl_file_path=jsonl_file_path, mode='product')
+        # staged_target = self.generate_staged_target()
+        # self.upload_jsonl(staged_target=staged_target, jsonl_path=jsonl_file_path)
+        # self.create_products(staged_target=staged_target)
+        # completed = False
+        # while not completed:
+        #     time.sleep(3)
+        #     response = self.pool_operation_status()
+        #     if response['data']['currentBulkOperation']['status'] == 'COMPLETED':
+        #         completed = True
 
-        # Create variants
-        self.csv_to_jsonl(csv_file_path=csv_file_path, jsonl_file_path=jsonl_file_path, mode='variant', locationId=locationId)
-        staged_target = self.generate_staged_target()
-        self.upload_jsonl(staged_target=staged_target, jsonl_path=jsonl_file_path)
-        self.create_variants(staged_target=staged_target)
-        completed = False
-        while not completed:
-            time.sleep(3)
-            response = self.pool_operation_status()
-            if response['data']['currentBulkOperation']['status'] == 'COMPLETED':
-                completed = True
-
-        # Update Files
-        self.update_files_for_import(csv_file_path)
+        # # Create variants
+        # self.csv_to_jsonl(csv_file_path=csv_file_path, jsonl_file_path=jsonl_file_path, mode='variant', locationId=locationId)
+        # staged_target = self.generate_staged_target()
+        # self.upload_jsonl(staged_target=staged_target, jsonl_path=jsonl_file_path)
+        # self.create_variants(staged_target=staged_target)
+        # completed = False
+        # while not completed:
+        #     time.sleep(3)
+        #     response = self.pool_operation_status()
+        #     if response['data']['currentBulkOperation']['status'] == 'COMPLETED':
+        #         completed = True
 
         # Publish product
         self.csv_to_jsonl(csv_file_path=csv_file_path, jsonl_file_path=jsonl_file_path, mode='publish')
@@ -1092,6 +1089,9 @@ class ShopifyApp:
             response = self.pool_operation_status()
             if response['data']['currentBulkOperation']['status'] == 'COMPLETED':
                 completed = True
+
+        # Update Files
+        self.update_files_for_import(csv_file_path)
 
         print('Product import is completed')
 
@@ -1205,7 +1205,7 @@ class ShopifyApp:
 
 if __name__ == '__main__':
     # Usage
-    load_dotenv()
+    load_dotenv('./.prd.env')
 
     # ============================== Create Session ====================================
     s = ShopifyApp(
@@ -1480,8 +1480,8 @@ if __name__ == '__main__':
     # s.chunk_shopify_csv_by_product(input_csv_path='./data/products_export_2.csv', output_directory='./data/chunked', products_per_chunk=200)
     
     # =============================== bulk import products =============================
-    s.import_bulk_data(csv_file_path='./data/prod_test.csv', jsonl_file_path='./data/bulk_op_vars.jsonl', locationId='gid://shopify/Location/76200411326')
-    # s.import_bulk_data(csv_file_path='./data/prod_test.csv', jsonl_file_path='./data/bulk_op_vars.jsonl', locationId='gid://shopify/Location/47387978') # prod
+    # s.import_bulk_data(csv_file_path='./data/prod_test.csv', jsonl_file_path='./data/bulk_op_vars.jsonl', locationId='gid://shopify/Location/76200411326')
+    s.import_bulk_data(csv_file_path='./data/prod_test.csv', jsonl_file_path='./data/bulk_op_vars.jsonl', locationId='gid://shopify/Location/47387978') # prod
 
     # ============================== pull operation status =============================
     # stopper = '0'
