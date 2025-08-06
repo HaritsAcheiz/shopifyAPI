@@ -111,6 +111,25 @@ class ShopifyApp:
 
         print(f"\nFinished chunking. Total {file_number} files created in '{output_directory}'.")
 
+    def chunk_list(input_list, chunk_size=249):
+        """
+        Chunks a list into smaller lists of a specified size and returns
+        a list containing all the chunks.
+
+        Args:
+            input_list (list): The list to be chunked.
+            chunk_size (int): The maximum size of each chunk. Defaults to 200.
+
+        Returns:
+            list: A list of lists, where each inner list is a chunk of the
+                original list.
+        """
+        result_list = []
+        for i in range(0, len(input_list), chunk_size):
+            chunk = input_list[i:i + chunk_size]
+            result_list.append(chunk)
+        return result_list
+
     # ==================================== CSV to JSONL ================================
     def csv_to_jsonl(self, csv_file_path, jsonl_file_path, mode, locationId=None):
         """
@@ -839,40 +858,41 @@ class ShopifyApp:
     def update_files_for_import(self, csv_file_path):
         df = pd.read_csv(csv_file_path)
         handles = df['Handle'].unique().tolist()
-        print(handles)
-        product_response = s.get_products_id_by_handle(handles=handles)
-        edges = product_response['data']['products']['edges']
-        files = list()
-        for i, edge in enumerate(edges):
-            for j, variant in enumerate(edge['node']['variants']['nodes']):
-                for k, variant_media in enumerate(variant['media']['nodes']):
-                    variant_file = {
-                        'id': variant_media['id'],
-                        'alt': edge['node']['title'] + ' ' + 'v' + str(j),
-                        'url': variant_media['preview']['image']['url']
+        chunked_handles = self.chunk_list(handles)
+        for chunked_handle in chunked_handles:
+            product_response = s.get_products_id_by_handle(handles=chunked_handle)
+            edges = product_response['data']['products']['edges']
+            files = list()
+            for i, edge in enumerate(edges):
+                for j, variant in enumerate(edge['node']['variants']['nodes']):
+                    for k, variant_media in enumerate(variant['media']['nodes']):
+                        variant_file = {
+                            'id': variant_media['id'],
+                            'alt': edge['node']['title'] + ' ' + 'v' + str(j),
+                            'url': variant_media['preview']['image']['url']
+                        }
+                        files.append(variant_file)
+                        
+                for l, media in enumerate(edge['node']['media']['nodes']):
+                    media_file = {
+                        'id': media['id'],
+                        'alt': edge['node']['title'] + ' ' + 'm' + str(l),
+                        'url': media['preview']['image']['url']
                     }
-                    files.append(variant_file)
-                    
-            for l, media in enumerate(edge['node']['media']['nodes']):
-                media_file = {
-                    'id': media['id'],
-                    'alt': edge['node']['title'] + ' ' + 'm' + str(l),
-                    'url': media['preview']['image']['url']
+                    files.append(media_file)
+
+            file_list = list()
+            for file in files:
+                file_variable = {
+                    "id": file['id'],
+                    "filename": file['alt'].lower().replace(' ', '-').replace(',', '') + '.' + file['url'].split('.')[-1].split("?")[0],
+                    "alt": file['alt']
                 }
-                files.append(media_file)
+                file_list.append(file_variable)
 
-        file_list = list()
-        for file in files:
-            file_variable = {
-                "id": file['id'],
-                "filename": file['alt'].lower().replace(' ', '-').replace(',', '') + '.' + file['url'].split('.')[-1].split("?")[0],
-                "alt": file['alt']
-            }
-            file_list.append(file_variable)
+            file_variables = {'files': file_list}
 
-        file_variables = {'files': file_list}
-
-        self.update_files(file_variables)
+            self.update_files(file_variables)
 
 
     # Delete
