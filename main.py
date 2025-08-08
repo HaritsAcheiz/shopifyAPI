@@ -1,4 +1,4 @@
-from httpx import Client
+from httpx import Client, HTTPError
 from dataclasses import dataclass
 import json
 import os
@@ -22,21 +22,71 @@ class ShopifyApp:
 
     # Support
     # ==================================== Send Request ================================
+    # def send_request(self, query, variables=None):
+    #     if self.client:
+    #         response = self.client.post(
+    #             f'https://{self.store_name}.myshopify.com/admin/api/{self.api_version}/graphql.json',
+    #             json={"query": query, "variables": variables}
+    #         )
+
+    #         print(response)
+    #         print(response.json())
+    #         print('')
+
+    #         return response.json()
+
+    #     else:
+    #         print('Please create session before execute the function')
+
     def send_request(self, query, variables=None):
-        if self.client:
-            response = self.client.post(
-                f'https://{self.store_name}.myshopify.com/admin/api/{self.api_version}/graphql.json',
-                json={"query": query, "variables": variables}
-            )
+        if not self.client:
+            print('Error: Please create a session before executing the function.')
+            return None
 
-            print(response)
-            print(response.json())
-            print('')
+        url = f'https://{self.store_name}.myshopify.com/admin/api/{self.api_version}/graphql.json'
+        payload = {"query": query, "variables": variables}
 
-            return response.json()
+        max_retries = 3
+        retries = 0
 
-        else:
-            print('Please create session before execute the function')
+        while retries < max_retries:
+            try:
+                response = self.client.post(url, json=payload)
+
+                # A 2xx status code indicates success
+                if 200 <= response.status_code < 400:
+                    print(f"Request successful after {retries + 1} attempt(s).")
+                    data = response.json()
+                    
+                    # Check for GraphQL errors within the response body
+                    if 'errors' in data:
+                        print(f"GraphQL Errors: {data['errors']}")
+                        return None
+                    
+                    print(data)
+
+                    return data
+
+                # If the status code is not 200, it's a non-retriable error
+                else:
+                    print(f"HTTP Error {response.status_code}: {response.reason_phrase}")
+                    print(f"Attempt {retries + 1}/{max_retries} failed. Retrying...")
+                    retries += 1
+                    time.sleep(2 ** retries) # Exponential backoff delay
+                    
+            except httpx.HTTPError as e:
+                print(f"Request failed: {e}")
+                retries += 1
+                print(f"Attempt {retries}/{max_retries} failed. Retrying...")
+                time.sleep(2 ** retries) # Exponential backoff delay
+                
+            except json.JSONDecodeError:
+                print("Failed to decode JSON from response.")
+                print(f"Response content: {response.text}")
+                return None # Non-retriable error
+
+        print(f"All {max_retries} attempts failed. Giving up.")
+        return None
 
     # ==================================== Clean Tags ================================
     def clean_and_collect_tags(self, series):
@@ -111,7 +161,7 @@ class ShopifyApp:
 
         print(f"\nFinished chunking. Total {file_number} files created in '{output_directory}'.")
 
-    def chunk_list(input_list, chunk_size=249):
+    def chunk_list(self, input_list, chunk_size=249):
         """
         Chunks a list into smaller lists of a specified size and returns
         a list containing all the chunks.
@@ -128,6 +178,7 @@ class ShopifyApp:
         for i in range(0, len(input_list), chunk_size):
             chunk = input_list[i:i + chunk_size]
             result_list.append(chunk)
+        
         return result_list
 
     # ==================================== CSV to JSONL ================================
@@ -345,6 +396,8 @@ class ShopifyApp:
                     if media['originalSource'] != '' and media['originalSource'] not in media_list:
                         media_list.append(media)
                 
+                variant_medias = [{'mediaContentType': 'IMAGE', 'originalSource': row.strip()} for row in list(set(listMediaSrc))]
+                media_list.extend(variant_medias)              
                 variants_entry['media'] = media_list          
                 datas.append(variants_entry)
         
@@ -386,7 +439,7 @@ class ShopifyApp:
     # ===================================== Session ====================================
     def create_session(self):
         print("Creating session...")
-        client = Client(timeout=12)
+        client = Client(timeout=None)
         headers = {
             'X-Shopify-Access-Token': self.access_token,
             'Content-Type': 'application/json'
@@ -827,7 +880,7 @@ class ShopifyApp:
         return response
 
     # =========================== Update Files By Ids ============================
-    def update_files(self, file_variables):
+    def update_file(self, file_variables):
         """
         file_variables format [
             {
@@ -854,46 +907,142 @@ class ShopifyApp:
         '''
 
         return self.send_request(query=file_mutation, variables=file_variables)
+    
+    # def update_files(self, staged_target):
+    #     print('Update Files...')
+    #     mutation = '''
+    #         mutation ($stagedUploadPath: String!){
+    #             bulkOperationRunMutation(
+    #                 mutation: "mutation call($files: [FileUpdateInput!]!){
+    #                     fileUpdate(files: $files){
+    #                         files {
+    #                             id
+    #                             fileStatus
+    #                         }
+    #                         userErrors {
+    #                             message
+    #                             field
+    #                         } 
+    #                     }
+    #                 }",
+    #                 stagedUploadPath: $stagedUploadPath
+    #             )
+    #             {
+    #                 bulkOperation {
+    #                     id
+    #                     url
+    #                     status
+    #                 }
+    #                 userErrors {
+    #                     message
+    #                     field
+    #                 }
+    #             }
+    #         }
+    #     '''
 
-    def update_files_for_import(self, csv_file_path):
+    #     variables = {
+    #         "stagedUploadPath": staged_target['data']['stagedUploadsCreate']['stagedTargets'][0]['parameters'][3]['value']
+    #     }
+
+    #     response = self.send_request(query=mutation, variables=variables)
+
+    #     return response
+
+    def update_files(self, staged_target):
+        print('Update Files...')
+        mutation = '''
+            mutation fileUpdateBulk($stagedUploadPath: String!) {
+                bulkOperationRunMutation(
+                    mutation: "mutation($id: ID!, $filename: String, $alt: String) { fileUpdate(files: {id: $id, filename: $filename, alt: $alt}) { files { id } userErrors { message field } } }",
+                    stagedUploadPath: $stagedUploadPath
+                ) {
+                    bulkOperation {
+                        id
+                        url
+                        status
+                    }
+                    userErrors {
+                        message
+                        field
+                    }
+                }
+            }
+        '''
+
+        variables = {
+            "stagedUploadPath": staged_target['data']['stagedUploadsCreate']['stagedTargets'][0]['parameters'][3]['value']
+        }
+
+        response = self.send_request(query=mutation, variables=variables)
+
+        return response
+
+    def update_files_for_import(self, csv_file_path, jsonl_file_path, bulk=False):
         df = pd.read_csv(csv_file_path)
         handles = df['Handle'].unique().tolist()
-        chunked_handles = self.chunk_list(handles)
-        for chunked_handle in chunked_handles:
-            product_response = s.get_products_id_by_handle(handles=chunked_handle)
-            edges = product_response['data']['products']['edges']
-            files = list()
-            for i, edge in enumerate(edges):
-                for j, variant in enumerate(edge['node']['variants']['nodes']):
-                    for k, variant_media in enumerate(variant['media']['nodes']):
-                        variant_file = {
-                            'id': variant_media['id'],
-                            'alt': edge['node']['title'] + ' ' + 'v' + str(j),
-                            'url': variant_media['preview']['image']['url']
-                        }
-                        files.append(variant_file)
-                        
-                for l, media in enumerate(edge['node']['media']['nodes']):
-                    media_file = {
-                        'id': media['id'],
-                        'alt': edge['node']['title'] + ' ' + 'm' + str(l),
-                        'url': media['preview']['image']['url']
+        
+        product_response = s.get_products_id_by_handle(handles=handles)
+        
+        edges = product_response['data']['products']['edges']
+        files = []
+        for i, edge in enumerate(edges):
+            for j, variant in enumerate(edge['node']['variants']['nodes']):
+                for k, variant_media in enumerate(variant['media']['nodes']):
+                    variant_file = {
+                        'handle': edge['node']['handle'],
+                        'id': variant_media['id'],
+                        'alt': edge['node']['title'] + ' ' + 'Magic Cars Variant ' + str(j),
+                        'url': variant_media['preview']['image']['url'],
+                        'seq': str(j),
+                        'src': 'magiccars-variant'
                     }
-                    files.append(media_file)
-
-            file_list = list()
-            for file in files:
-                file_variable = {
-                    "id": file['id'],
-                    "filename": file['alt'].lower().replace(' ', '-').replace(',', '') + '.' + file['url'].split('.')[-1].split("?")[0],
-                    "alt": file['alt']
+                    files.append(variant_file.copy())
+                    
+            for l, media in enumerate(edge['node']['media']['nodes']):
+                media_file = {
+                    'handle': edge['node']['handle'],
+                    'id': media['id'],
+                    'alt': edge['node']['title'] + ' ' + 'Magic Cars ' + str(l),
+                    'url': media['preview']['image']['url'],
+                    'seq': str(l),
+                    'src': 'magiccars'
                 }
-                file_list.append(file_variable)
+                files.append(media_file.copy())
 
-            file_variables = {'files': file_list}
+        file_list_raw = []
+        for file in files: 
+            file_variable = {
+                "id": file['id'],
+                "filename": file['handle'] + '-' + file['src'] + '-' + file['seq'] + '.' + file['url'].split('.')[-1].split("?")[0],
+                "alt": file['alt']
+            }
+            file_list_raw.append(file_variable.copy())
+        df = pd.DataFrame(file_list_raw)
+        unique_df = df.drop_duplicates('id')
+        file_list = unique_df.to_dict('records')
 
-            self.update_files(file_variables)
-
+        chunked_file_list = self.chunk_list(file_list, chunk_size=50)
+        if not bulk:
+            for item in chunked_file_list:
+                file_variables = {'files': item}
+                self.update_file(file_variables)
+                time.sleep(1)
+        else:
+            for item in chunked_file_list:
+                with open(jsonl_file_path, 'w', encoding='utf-8') as outfile:
+                    for data in item:
+                        outfile.write(json.dumps(data, ensure_ascii=False) + '\n')
+                print(f"Successfully converted file list to '{jsonl_file_path}'")
+                staged_target = self.generate_staged_target()
+                self.upload_jsonl(staged_target=staged_target, jsonl_path=jsonl_file_path)
+                self.update_files(staged_target=staged_target)
+                completed = False
+                while not completed:
+                    time.sleep(3)
+                    response = self.pool_operation_status()
+                    if response['data']['currentBulkOperation']['status'] == 'COMPLETED':
+                        completed = True
 
     # Delete
     # ===================================== Product ====================================
@@ -1109,9 +1258,6 @@ class ShopifyApp:
             response = self.pool_operation_status()
             if response['data']['currentBulkOperation']['status'] == 'COMPLETED':
                 completed = True
-
-        # Update Files
-        self.update_files_for_import(csv_file_path)
 
         print('Product import is completed')
 
@@ -1447,40 +1593,7 @@ if __name__ == '__main__':
     # s.get_products_id_by_handle(handles=handles)
 
     # ============================== Update Files by IDs ===============================
-    # handles = ['1-seaters-ride-on-car-truck-battery-power-kids-electric-car-with-remote-12v-12709']
-    # product_response = s.get_products_id_by_handle(handles=handles)
-    # edges = product_response['data']['products']['edges']
-    # files = list()
-    # for i, edge in enumerate(edges):
-    #     for j, variant in enumerate(edge['node']['variants']['nodes']):
-    #         for k, variant_media in enumerate(variant['media']['nodes']):
-    #             variant_file = {
-    #                 'id': variant_media['id'],
-    #                 'alt': edge['node']['title'] + ' ' + 'v' + str(j),
-    #                 'url': variant_media['preview']['image']['url']
-    #             }
-    #             files.append(variant_file)
-                
-    #     for l, media in enumerate(edge['node']['media']['nodes']):
-    #         media_file = {
-    #             'id': media['id'],
-    #             'alt': edge['node']['title'] + ' ' + 'm' + str(l),
-    #             'url': media['preview']['image']['url']
-    #         }
-    #         files.append(media_file)
-
-    # file_list = list()
-    # for file in files:
-    #     file_variable = {
-    #         "id": file['id'],
-    #         "filename": file['alt'].lower().replace(' ', '-').replace(',', '') + '.' + file['url'].split('.')[-1].split("?")[0],
-    #         "alt": file['alt']
-    #     }
-    #     file_list.append(file_variable)
-
-    # file_variables = {'files': file_list}
-
-    # s.update_files(file_variables)
+    # s.update_files_for_import('./data/import200.csv')
 
     # ================================= CSV to JSONL ==================================
     # s.csv_to_jsonl(csv_file_path='./data/sample(in).csv', jsonl_file_path='./data/bulk_op_vars.jsonl', mode='variant', locationId='gid://shopify/Location/76200411326')
@@ -1500,8 +1613,11 @@ if __name__ == '__main__':
     # s.chunk_shopify_csv_by_product(input_csv_path='./data/products_export_2.csv', output_directory='./data/chunked', products_per_chunk=200)
     
     # =============================== bulk import products =============================
-    s.import_bulk_data(csv_file_path='./data/import200.csv', jsonl_file_path='./data/bulk_op_vars.jsonl', locationId='gid://shopify/Location/76200411326')
-    # s.import_bulk_data(csv_file_path='./data/prod_test.csv', jsonl_file_path='./data/bulk_op_vars.jsonl', locationId='gid://shopify/Location/47387978') # prod
+    s.import_bulk_data(csv_file_path='./data/import_test.csv', jsonl_file_path='./data/bulk_op_vars.jsonl', locationId='gid://shopify/Location/76200411326')
+    # s.import_bulk_data(csv_file_path='./data/import200.csv', jsonl_file_path='./data/bulk_op_vars.jsonl', locationId='gid://shopify/Location/47387978') # prod
+
+    # =============================== Update Files =============================
+    # s.update_files_for_import(csv_file_path='./data/import200.csv', jsonl_file_path='./data/bulk_op_vars.jsonl', bulk=False)
 
     # ============================== pull operation status =============================
     # stopper = '0'
