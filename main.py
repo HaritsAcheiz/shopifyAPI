@@ -298,7 +298,7 @@ class ShopifyApp:
 
                 metafields = []
                 if row['Vendor SKU']:
-                    vendorSKU = {'namespace': 'custom', 'key': 'vendor_sku', 'value': row['Vendor SKU'], 'type': 'single_line_text_field'}
+                    vendorSKU = {'namespace': 'custom', 'key': 'vendor_sku', 'value': str(int(float(row['Vendor SKU']))), 'type': 'single_line_text_field'}
                     metafields.append(vendorSKU)
                 if row['enable_best_price (product.metafields.custom.enable_best_price)']:
                     enableBestPrice = {'namespace': 'custom', 'key': 'enable_best_price', 'value': row['enable_best_price (product.metafields.custom.enable_best_price)'], 'type': 'boolean'}
@@ -348,7 +348,7 @@ class ShopifyApp:
                             'price': float(row['Variant Price'][i]) if row['Variant Price'][i] else 0.0,
                             'compareAtPrice': float(row['Variant Compare At Price'][i]) if row['Variant Compare At Price'][i] else None,
                             'taxable': str(row['Variant Taxable'][i]).strip().lower() == 'true',
-                            'barcode': str(row['Variant Barcode'][i]).strip() if row['Variant Barcode'][i] else '',
+                            'barcode': str(int(float(row['Variant Barcode'][i]))).strip() if row['Variant Barcode'][i] else '',
                             'mediaSrc': listMediaSrc
                         }
 
@@ -372,7 +372,7 @@ class ShopifyApp:
                         variant['optionValues'] = option_values.copy()
 
                         quantities = []
-                        for qty in row['Available Qty']: 
+                        for qty in row['Available Qty']:
                             if qty != '':
                                 quantity = {
                                     'availableQuantity': int(qty),
@@ -386,7 +386,7 @@ class ShopifyApp:
                         variants.append(variant)
 
                 variants_entry['variants'] = variants
-                
+                                
                 media_list = list()
                 for i in range(len(row['Image Src'])): 
                     media = {
@@ -397,9 +397,9 @@ class ShopifyApp:
                         media_list.append(media)
                 
                 variant_medias = [{'mediaContentType': 'IMAGE', 'originalSource': row.strip()} for row in list(set(listMediaSrc))]
-                media_list.extend(variant_medias)              
-                variants_entry['media'] = media_list          
-                datas.append(variants_entry)
+                media_list.extend(variant_medias)          
+                variants_entry['media'] = media_list.copy()     
+                datas.append(variants_entry.copy())
         
         if mode == 'publish':
             handles = grouped_df['Handle'].tolist()
@@ -1371,7 +1371,7 @@ class ShopifyApp:
 
 if __name__ == '__main__':
     # Usage
-    load_dotenv()
+    load_dotenv('./.prd.env')
 
     # ============================== Create Session ====================================
     s = ShopifyApp(
@@ -1596,7 +1596,7 @@ if __name__ == '__main__':
     # s.update_files_for_import('./data/import200.csv')
 
     # ================================= CSV to JSONL ==================================
-    # s.csv_to_jsonl(csv_file_path='./data/sample(in).csv', jsonl_file_path='./data/bulk_op_vars.jsonl', mode='variant', locationId='gid://shopify/Location/76200411326')
+    # s.csv_to_jsonl(csv_file_path='./data/import201_test.csv', jsonl_file_path='./data/bulk_op_vars_test.jsonl', mode='variant', locationId='gid://shopify/Location/47387978')
 
     # ================================= Staged Target ==================================
     # staged_target = s.generate_staged_target()
@@ -1613,8 +1613,8 @@ if __name__ == '__main__':
     # s.chunk_shopify_csv_by_product(input_csv_path='./data/products_export_2.csv', output_directory='./data/chunked', products_per_chunk=200)
     
     # =============================== bulk import products =============================
-    s.import_bulk_data(csv_file_path='./data/import_test.csv', jsonl_file_path='./data/bulk_op_vars.jsonl', locationId='gid://shopify/Location/76200411326')
-    # s.import_bulk_data(csv_file_path='./data/import200.csv', jsonl_file_path='./data/bulk_op_vars.jsonl', locationId='gid://shopify/Location/47387978') # prod
+    # s.import_bulk_data(csv_file_path='./data/import201_test.csv', jsonl_file_path='./data/bulk_op_vars.jsonl', locationId='gid://shopify/Location/76200411326')
+    s.import_bulk_data(csv_file_path='./data/import201_test.csv', jsonl_file_path='./data/bulk_op_vars.jsonl', locationId='gid://shopify/Location/47387978') # prod
 
     # =============================== Update Files =============================
     # s.update_files_for_import(csv_file_path='./data/import200.csv', jsonl_file_path='./data/bulk_op_vars.jsonl', bulk=False)
