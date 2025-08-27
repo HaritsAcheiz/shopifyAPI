@@ -637,6 +637,7 @@ class ShopifyApp:
                                     }
                                 }
                             }
+                            createdAt
                             media(first: 30){
                                 nodes{
                                     id
@@ -658,6 +659,69 @@ class ShopifyApp:
             }
         '''
         variables = {'query': "handle:{}".format(f_handles)}
+
+        return self.send_request(query=query, variables=variables)
+
+    # ============================= get_products_with_query ==========================
+    # def get_products_with_query(self, variable_query):
+    #     print('Getting products..')
+    #     query = '''
+    #         query(
+    #             $query: String
+    #         )
+    #         {
+    #             products(first: 250, query: $query) {
+    #                 edges {
+    #                     node {
+    #                         handle
+    #                         id
+    #                         title
+    #                         metafield(key: "vendor_sku"){
+    #                             value
+    #                         }
+    #                     }
+    #                 }
+    #                 pageInfo {
+    #                     endCursor
+    #                     hasNextPage
+    #                 }
+    #             }
+    #         }
+    #     '''
+    #     variables = variable_query
+
+    #     return self.send_request(query=query, variables=variables)
+
+    def get_products_with_pagination(self, variable_query, after=None):
+        print('Getting products...')
+        query = '''
+            query(
+                $query: String,
+                $after: String
+            )
+            {
+                products(first: 250, query: $query, after: $after) {
+                    edges {
+                        node {
+                            handle
+                            id
+                            title
+                            metafield(key: "vendor_sku", namespace: "custom") {
+                                value
+                            }
+                        }
+                    }
+                    pageInfo {
+                        endCursor
+                        hasNextPage
+                    }
+                }
+            }
+        '''
+
+        variables = variable_query
+        if after:
+            variables['after'] = after
 
         return self.send_request(query=query, variables=variables)
 
@@ -1614,7 +1678,7 @@ if __name__ == '__main__':
     
     # =============================== bulk import products =============================
     # s.import_bulk_data(csv_file_path='./data/import201_test.csv', jsonl_file_path='./data/bulk_op_vars.jsonl', locationId='gid://shopify/Location/76200411326')
-    s.import_bulk_data(csv_file_path='./data/import201_test.csv', jsonl_file_path='./data/bulk_op_vars.jsonl', locationId='gid://shopify/Location/47387978') # prod
+    # s.import_bulk_data(csv_file_path='./data/import201_test.csv', jsonl_file_path='./data/bulk_op_vars.jsonl', locationId='gid://shopify/Location/47387978') # prod
 
     # =============================== Update Files =============================
     # s.update_files_for_import(csv_file_path='./data/import200.csv', jsonl_file_path='./data/bulk_op_vars.jsonl', bulk=False)
@@ -1631,3 +1695,42 @@ if __name__ == '__main__':
     # s.create_collection(client)
     # s.get_collections(client)
     # print(s.check_bulk_operation_status(client, bulk_operation_id='gid://shopify/BulkOperation/3252439023930'))
+
+    # Fetch products with date filter
+    # var_query = {'query': "created_at>:{}".format('2025-08-15T04:24:54Z')}
+    records = []
+    var_query = {'query': "created_at:>'2025-08-15T04:24:54Z'"}
+    # s.get_products_id_by_handle(['zeophol-kids-ride-on-car-24v-4wd-2wd-switch-electric-power-wheels-truck-2-seats-15624'])
+    # response = s.get_products_with_query(variable_query=var_query)
+    # edges = response['data']['products']['edges']
+    # record = [i['node'] for i in edges]
+    # records.extend(record.copy())
+    # has_next_page = response['data']['products']['pageInfo']['hasNextPage']
+    # cursor = response['data']['products']['pageInfo']['endCursor']
+    # while has_next_page:
+    #     var_query = {'query': "created_at:>'2025-08-15T04:24:54Z'", 'after': cursor}
+    #     response = s.get_products_with_query(variable_query=var_query)
+    #     edges = response['data']['products']['edges']
+    #     record = [i['node'] for i in edges]
+    #     records.extend(record.copy())
+    #     has_next_page = response['data']['products']['pageInfo']['hasNextPage']
+    #     cursor = response['data']['products']['pageInfo']['endCursor']
+
+    # df = pd.DataFrame.from_records(records)
+    # df.to_csv('data/uploaded_data.csv', index=False)
+
+    records = []
+    var_query = {'query': "created_at:>'2025-08-15T04:24:54Z'"}
+    cursor = None
+    has_next_page = True
+
+    while has_next_page:
+        response = s.get_products_with_pagination(variable_query=var_query, after=cursor)
+        edges = response['data']['products']['edges']
+        record = [i['node'] for i in edges]
+        records.extend(record)
+        has_next_page = response['data']['products']['pageInfo']['hasNextPage']
+        cursor = response['data']['products']['pageInfo']['endCursor']
+
+    df = pd.DataFrame.from_records(records)
+    df.to_csv('data/uploaded_data.csv', index=False)
