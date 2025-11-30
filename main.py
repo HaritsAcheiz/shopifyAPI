@@ -709,6 +709,7 @@ class ShopifyApp:
                             metafield(key: "vendor_sku", namespace: "custom") {
                                 value
                             }
+                            tags
                         }
                     }
                     pageInfo {
@@ -722,6 +723,46 @@ class ShopifyApp:
         variables = variable_query
         if after:
             variables['after'] = after
+
+        return self.send_request(query=query, variables=variables)
+
+    def get_product_variants_by_sku(self, variable_query, after=None):
+        print('Getting products...')
+        query = '''
+            query(
+                $query: String
+            )
+            {
+                products(first: 3, query: $query) {
+                    edges {
+                        node {
+                            handle
+                            id
+                            title
+                            description
+                            variants(first: 20){
+                                nodes{
+                                    compareAtPrice
+                                    displayName
+                                    inventoryItem{
+                                        sku
+                                    }
+                                    inventoryQuantity
+                                    price
+
+                                }
+                            }
+                        }
+                    }
+                    pageInfo {
+                        endCursor
+                        hasNextPage
+                    }
+                }
+            }
+        '''
+
+        variables = variable_query
 
         return self.send_request(query=query, variables=variables)
 
@@ -765,6 +806,20 @@ class ShopifyApp:
                             }
                         }
                         isActive
+                    }
+                }
+            }
+        '''
+
+        return self.send_request(query=query)
+
+    def get_product_tags(self):
+        print('Getting product tags...')
+        query = '''
+            {
+                productTags (first: 250){
+                    edges{
+                        node
                     }
                 }
             }
@@ -1222,6 +1277,27 @@ class ShopifyApp:
         response = self.send_request(query=mutation, variables=variables)
 
         return response
+
+    def remove_tags(self, product_id, tags):
+        print("Removing Tags...")
+        mutation = '''
+            mutation removeTags($id: ID!, $tags: [String!]!) {
+                tagsRemove(id: $id, tags: $tags) {
+                    node {
+                        id
+                    }
+                    userErrors {
+                        message
+                    }
+                }
+            }
+        '''
+        remove_tags_variables = {
+            "id": product_id,
+            "tags": tags
+        }
+
+        return self.send_request(query=mutation, variables=remove_tags_variables)
 
     def upload_jsonl(self, staged_target, jsonl_path):
         print("Uploading jsonl file to staged path...")
@@ -1698,9 +1774,9 @@ if __name__ == '__main__':
 
     # Fetch products with date filter
     # var_query = {'query': "created_at>:{}".format('2025-08-15T04:24:54Z')}
-    records = []
-    var_query = {'query': "created_at:>'2025-08-15T04:24:54Z'"}
-    # s.get_products_id_by_handle(['zeophol-kids-ride-on-car-24v-4wd-2wd-switch-electric-power-wheels-truck-2-seats-15624'])
+    # records = []
+    # var_query = {'query': "created_at:>'2025-08-15T04:24:54Z'"}
+    # s.get_products_id_by_handle(['weelye-24v-30000rpm-gearbox-24v-dc-motor-for-kids-ride-on-car-suv-parts-electr-33505'])
     # response = s.get_products_with_query(variable_query=var_query)
     # edges = response['data']['products']['edges']
     # record = [i['node'] for i in edges]
@@ -1719,6 +1795,7 @@ if __name__ == '__main__':
     # df = pd.DataFrame.from_records(records)
     # df.to_csv('data/uploaded_data.csv', index=False)
 
+    # =============================== get products using filter =============================
     records = []
     var_query = {'query': "created_at:>'2025-08-15T04:24:54Z'"}
     cursor = None
@@ -1734,3 +1811,6 @@ if __name__ == '__main__':
 
     df = pd.DataFrame.from_records(records)
     df.to_csv('data/uploaded_data.csv', index=False)
+
+    # =============================== get_tags =============================
+    # s.get_product_tags()
