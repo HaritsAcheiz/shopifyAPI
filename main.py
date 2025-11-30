@@ -573,6 +573,215 @@ class ShopifyApp:
 
         return self.send_request(query=mutation, variables=variables)
 
+    # ================================== Create Products Bulk ==============================    
+    def create_products(self, staged_target):
+        print('Creating products...')
+        mutation = '''
+            mutation ($stagedUploadPath: String!){
+                bulkOperationRunMutation(
+                    mutation: "mutation call($product: ProductCreateInput!, $media: [CreateMediaInput!]){
+                        productCreate(product: $product, media: $media){
+                            product{
+                                handle
+                                id
+                            }
+                            userErrors {
+                                message
+                                field
+                            } 
+                        }
+                    }",
+                    stagedUploadPath: $stagedUploadPath
+                )
+                {
+                    bulkOperation {
+                        id
+                        url
+                        status
+                    }
+                    userErrors {
+                        message
+                        field
+                    }
+                }
+            }
+        '''
+
+        variables = {
+            "stagedUploadPath": staged_target['data']['stagedUploadsCreate']['stagedTargets'][0]['parameters'][3]['value']
+        }
+
+        response = self.send_request(query=mutation, variables=variables)
+
+        return response
+    
+    # ================================== Create Variants Bulk ==============================
+    def create_variants(self, staged_target):
+        print('Creating variants...')
+        mutation = '''
+            mutation ($stagedUploadPath: String!){
+                bulkOperationRunMutation(
+                    mutation: "mutation call($productId: ID!, $variants: [ProductVariantsBulkInput!]!, $strategy: ProductVariantsBulkCreateStrategy, $media: [CreateMediaInput!]){
+                        productVariantsBulkCreate(productId: $productId, variants: $variants, strategy: $strategy, media: $media){
+                            product{
+                                handle
+                                id
+                            }
+                            productVariants{
+                                sku
+                                id
+                            }
+                            userErrors {
+                                message
+                                field
+                            } 
+                        }
+                    }",
+                    stagedUploadPath: $stagedUploadPath
+                )
+                {
+                    bulkOperation {
+                        id
+                        url
+                        status
+                    }
+                    userErrors {
+                        message
+                        field
+                    }
+                }
+            }
+        '''
+
+        variables = {
+            "stagedUploadPath": staged_target['data']['stagedUploadsCreate']['stagedTargets'][0]['parameters'][3]['value']
+        }
+
+        response = self.send_request(query=mutation, variables=variables)
+
+        return response
+
+    # ================================== Import Bulk Data ================================
+    def import_bulk_data(self, csv_file_path, jsonl_file_path, locationId):
+        print(f'Importing product from file {csv_file_path}')
+        # Create products
+        self.csv_to_jsonl(csv_file_path=csv_file_path, jsonl_file_path=jsonl_file_path, mode='product')
+        staged_target = self.generate_staged_target()
+        self.upload_jsonl(staged_target=staged_target, jsonl_path=jsonl_file_path)
+        self.create_products(staged_target=staged_target)
+        completed = False
+        while not completed:
+            time.sleep(3)
+            response = self.pool_operation_status()
+            if response['data']['currentBulkOperation']['status'] == 'COMPLETED':
+                completed = True
+
+        # Create variants
+        self.csv_to_jsonl(csv_file_path=csv_file_path, jsonl_file_path=jsonl_file_path, mode='variant', locationId=locationId)
+        staged_target = self.generate_staged_target()
+        self.upload_jsonl(staged_target=staged_target, jsonl_path=jsonl_file_path)
+        self.create_variants(staged_target=staged_target)
+        completed = False
+        while not completed:
+            time.sleep(3)
+            response = self.pool_operation_status()
+            if response['data']['currentBulkOperation']['status'] == 'COMPLETED':
+                completed = True
+
+        # Publish product
+        self.csv_to_jsonl(csv_file_path=csv_file_path, jsonl_file_path=jsonl_file_path, mode='publish')
+        staged_target = self.generate_staged_target()
+        self.upload_jsonl(staged_target=staged_target, jsonl_path=jsonl_file_path)
+        self.publish_products(staged_target=staged_target)
+        completed = False
+        while not completed:
+            time.sleep(3)
+            response = self.pool_operation_status()
+            if response['data']['currentBulkOperation']['status'] == 'COMPLETED':
+                completed = True
+
+        print('Product import is completed')
+
+    # ================================== Webhook Subscription ================================
+    def webhook_subscription(self):
+        print("Subscribing webhook...")
+        mutation = '''
+                    mutation {
+                        webhookSubscriptionCreate(
+                            topic: BULK_OPERATIONS_FINISH
+                            webhookSubscription: {
+                                format: JSON,
+                                callbackUrl: "https://12345.ngrok.io/"
+                                }
+                        )
+                        {
+                            userErrors {
+                                field
+                                message
+                            }
+                            webhookSubscription {
+                                id
+                            }
+                        }
+                    }
+        '''
+
+        return self.send_request(query=mutation)
+
+    # ================================== Upload JSONL ================================
+    def upload_jsonl(self, staged_target, jsonl_path):
+        print("Uploading jsonl file to staged path...")
+        url = staged_target['data']['stagedUploadsCreate']['stagedTargets'][0]['url']
+        parameters = staged_target['data']['stagedUploadsCreate']['stagedTargets'][0]['parameters']
+        files = dict()
+        for parameter in parameters:
+            files[f"{parameter['name']}"] = (None, parameter['value'])
+        files['file'] = open(jsonl_path, 'rb')
+
+        # with httpx.Client(timeout=None, follow_redirects=True) as sess:
+        response = httpx.post(url, files=files)
+        # response = self.client.post(url, files=files)
+
+        print(response)
+        print(response.content)
+        print('')
+    
+    # =================================== Create Collection ================================
+    def create_collection(self, client):
+        print('Creating collection...')
+        mutation = '''
+        mutation ($descriptionHtml: String!, $title: String!){
+            collectionCreate(
+                input: {
+                    descriptionHtml: $descriptionHtml
+                    title: $title
+                }
+            )
+            {
+                collection{
+                    id
+                    productsCount
+                }
+                userErrors{
+                    field
+                    message
+                }   
+            }
+        }    
+        '''
+
+        variables = {
+            'descriptionHtml': "<p>This Collection is created as a training material</p>",
+            'title': "Collection1"
+        }
+
+        response = client.post(f'https://{self.store_name}.myshopify.com/admin/api/2023-07/graphql.json',
+                               json={"query": mutation, 'variables': variables})
+        print(response)
+        print(response.json())
+        print('')
+
+
     # Read
     # ====================================== Shop ======================================
     def query_shop(self):
@@ -799,8 +1008,73 @@ class ShopifyApp:
 
         return self.send_request(query=query)
 
-    # Update
+    # =================================== Collections =================================
+    def get_collections(self, client):
+        print('Getting collection list...')
+        query = '''
+                query {
+                    collections(first: 10){
+                        edges{
+                            node{
+                                id
+                                title
+                                handle
+                                updatedAt
+                                productsCount
+                            }
+                        }
+                    }
+                }
+                '''
 
+        response = client.post(f'https://{self.store_name}.myshopify.com/admin/api/2023-07/graphql.json',
+                               json={"query": query})
+        print(response)
+        print(response.json())
+        print('')
+
+    # ================================== Pool Operation Status ================================
+    def pool_operation_status(self):
+        print("Pooling operation status...")
+        query = '''
+                    query {
+                        currentBulkOperation(type: MUTATION) {
+                            id
+                            status
+                            errorCode
+                            createdAt
+                            completedAt
+                            objectCount
+                            fileSize
+                            url
+                            partialDataUrl
+                        }
+                    }
+                '''
+
+        return self.send_request(query=query)
+    
+    # ================================== Check Bulk Operation Status ================================
+    def check_bulk_operation_status(self, client, bulk_operation_id):
+        query = f'''
+            query {{
+                node(id: "{bulk_operation_id}") {{
+                    ... on BulkOperation {{
+                        id
+                        status
+                    }}
+                }}
+            }}
+        '''
+
+        response = client.post(f'https://{self.store_name}.myshopify.com/admin/api/2023-07/graphql.json',
+                               json={"query": query})
+
+        response_data = response.json()
+        status = response_data['data']['node']['status']
+        return status
+
+    # Update
     # =================================== Update Products ================================
     def update_product(self, product_variables):
         print('Updating Products...')
@@ -1119,278 +1393,7 @@ class ShopifyApp:
                     if response['data']['currentBulkOperation']['status'] == 'COMPLETED':
                         completed = True
 
-    # Delete
-    # ===================================== Product ====================================
-    def delete_products_by_handle(self, handles):
-        print('Deleting Product...')
-
-        response = self.get_products_id_by_handle(handles=handles)
-        try:
-            found_flag = response['data']['products']['edges'][0]
-            product_ids = [item['node']['id'] for item in response['data']['products']['edges']]
-            for product_id in product_ids:
-                mutation = '''
-                    mutation productDelete($input: ProductDeleteInput!) {
-                        productDelete(input: $input) {
-                            deletedProductId
-                        }
-                    }
-                '''
-
-                variables = {
-                    'input': {
-                        'id': product_id
-                    }
-                }
-
-                self.send_request(query=mutation, variables=variables)
-
-        except IndexError:
-            print('Item Not Found')
-
-    def create_products(self, staged_target):
-        print('Creating products...')
-        mutation = '''
-            mutation ($stagedUploadPath: String!){
-                bulkOperationRunMutation(
-                    mutation: "mutation call($product: ProductCreateInput!, $media: [CreateMediaInput!]){
-                        productCreate(product: $product, media: $media){
-                            product{
-                                handle
-                                id
-                            }
-                            userErrors {
-                                message
-                                field
-                            } 
-                        }
-                    }",
-                    stagedUploadPath: $stagedUploadPath
-                )
-                {
-                    bulkOperation {
-                        id
-                        url
-                        status
-                    }
-                    userErrors {
-                        message
-                        field
-                    }
-                }
-            }
-        '''
-
-        variables = {
-            "stagedUploadPath": staged_target['data']['stagedUploadsCreate']['stagedTargets'][0]['parameters'][3]['value']
-        }
-
-        response = self.send_request(query=mutation, variables=variables)
-
-        return response
-    
-    def create_variants(self, staged_target):
-        print('Creating variants...')
-        mutation = '''
-            mutation ($stagedUploadPath: String!){
-                bulkOperationRunMutation(
-                    mutation: "mutation call($productId: ID!, $variants: [ProductVariantsBulkInput!]!, $strategy: ProductVariantsBulkCreateStrategy, $media: [CreateMediaInput!]){
-                        productVariantsBulkCreate(productId: $productId, variants: $variants, strategy: $strategy, media: $media){
-                            product{
-                                handle
-                                id
-                            }
-                            productVariants{
-                                sku
-                                id
-                            }
-                            userErrors {
-                                message
-                                field
-                            } 
-                        }
-                    }",
-                    stagedUploadPath: $stagedUploadPath
-                )
-                {
-                    bulkOperation {
-                        id
-                        url
-                        status
-                    }
-                    userErrors {
-                        message
-                        field
-                    }
-                }
-            }
-        '''
-
-        variables = {
-            "stagedUploadPath": staged_target['data']['stagedUploadsCreate']['stagedTargets'][0]['parameters'][3]['value']
-        }
-
-        response = self.send_request(query=mutation, variables=variables)
-
-        return response
-
-    def remove_tags(self, product_id, tags):
-        print("Removing Tags...")
-        mutation = '''
-            mutation removeTags($id: ID!, $tags: [String!]!) {
-                tagsRemove(id: $id, tags: $tags) {
-                    node {
-                        id
-                    }
-                    userErrors {
-                        message
-                    }
-                }
-            }
-        '''
-        remove_tags_variables = {
-            "id": product_id,
-            "tags": tags
-        }
-
-        return self.send_request(query=mutation, variables=remove_tags_variables)
-
-    def upload_jsonl(self, staged_target, jsonl_path):
-        print("Uploading jsonl file to staged path...")
-        url = staged_target['data']['stagedUploadsCreate']['stagedTargets'][0]['url']
-        parameters = staged_target['data']['stagedUploadsCreate']['stagedTargets'][0]['parameters']
-        files = dict()
-        for parameter in parameters:
-            files[f"{parameter['name']}"] = (None, parameter['value'])
-        files['file'] = open(jsonl_path, 'rb')
-
-        # with httpx.Client(timeout=None, follow_redirects=True) as sess:
-        response = httpx.post(url, files=files)
-        # response = self.client.post(url, files=files)
-
-        print(response)
-        print(response.content)
-        print('')
-
-    def webhook_subscription(self):
-        print("Subscribing webhook...")
-        mutation = '''
-                    mutation {
-                        webhookSubscriptionCreate(
-                            topic: BULK_OPERATIONS_FINISH
-                            webhookSubscription: {
-                                format: JSON,
-                                callbackUrl: "https://12345.ngrok.io/"
-                                }
-                        )
-                        {
-                            userErrors {
-                                field
-                                message
-                            }
-                            webhookSubscription {
-                                id
-                            }
-                        }
-                    }
-        '''
-
-        return self.send_request(query=mutation)
-
-    def pool_operation_status(self):
-        print("Pooling operation status...")
-        query = '''
-                    query {
-                        currentBulkOperation(type: MUTATION) {
-                            id
-                            status
-                            errorCode
-                            createdAt
-                            completedAt
-                            objectCount
-                            fileSize
-                            url
-                            partialDataUrl
-                        }
-                    }
-                '''
-
-        return self.send_request(query=query)
-
-    def import_bulk_data(self, csv_file_path, jsonl_file_path, locationId):
-        print(f'Importing product from file {csv_file_path}')
-        # Create products
-        self.csv_to_jsonl(csv_file_path=csv_file_path, jsonl_file_path=jsonl_file_path, mode='product')
-        staged_target = self.generate_staged_target()
-        self.upload_jsonl(staged_target=staged_target, jsonl_path=jsonl_file_path)
-        self.create_products(staged_target=staged_target)
-        completed = False
-        while not completed:
-            time.sleep(3)
-            response = self.pool_operation_status()
-            if response['data']['currentBulkOperation']['status'] == 'COMPLETED':
-                completed = True
-
-        # Create variants
-        self.csv_to_jsonl(csv_file_path=csv_file_path, jsonl_file_path=jsonl_file_path, mode='variant', locationId=locationId)
-        staged_target = self.generate_staged_target()
-        self.upload_jsonl(staged_target=staged_target, jsonl_path=jsonl_file_path)
-        self.create_variants(staged_target=staged_target)
-        completed = False
-        while not completed:
-            time.sleep(3)
-            response = self.pool_operation_status()
-            if response['data']['currentBulkOperation']['status'] == 'COMPLETED':
-                completed = True
-
-        # Publish product
-        self.csv_to_jsonl(csv_file_path=csv_file_path, jsonl_file_path=jsonl_file_path, mode='publish')
-        staged_target = self.generate_staged_target()
-        self.upload_jsonl(staged_target=staged_target, jsonl_path=jsonl_file_path)
-        self.publish_products(staged_target=staged_target)
-        completed = False
-        while not completed:
-            time.sleep(3)
-            response = self.pool_operation_status()
-            if response['data']['currentBulkOperation']['status'] == 'COMPLETED':
-                completed = True
-
-        print('Product import is completed')
-
-    def create_collection(self, client):
-        print('Creating collection...')
-        mutation = '''
-        mutation ($descriptionHtml: String!, $title: String!){
-            collectionCreate(
-                input: {
-                    descriptionHtml: $descriptionHtml
-                    title: $title
-                }
-            )
-            {
-                collection{
-                    id
-                    productsCount
-                }
-                userErrors{
-                    field
-                    message
-                }   
-            }
-        }    
-        '''
-
-        variables = {
-            'descriptionHtml': "<p>This Collection is created as a training material</p>",
-            'title': "Collection1"
-        }
-
-        response = client.post(f'https://{self.store_name}.myshopify.com/admin/api/2023-07/graphql.json',
-                               json={"query": mutation, 'variables': variables})
-        print(response)
-        print(response.json())
-        print('')
-
+    # =================================== Publish Collection ================================
     def publish_collection(self, client):
         print('Publishing collection...')
         mutation = '''
@@ -1421,48 +1424,55 @@ class ShopifyApp:
         print(response.json())
         print('')
 
-    def get_collections(self, client):
-        print('Getting collection list...')
-        query = '''
-                query {
-                    collections(first: 10){
-                        edges{
-                            node{
-                                id
-                                title
-                                handle
-                                updatedAt
-                                productsCount
-                            }
+    # Delete
+    # ===================================== Product ====================================
+    def delete_products_by_handle(self, handles):
+        print('Deleting Product...')
+
+        response = self.get_products_id_by_handle(handles=handles)
+        try:
+            found_flag = response['data']['products']['edges'][0]
+            product_ids = [item['node']['id'] for item in response['data']['products']['edges']]
+            for product_id in product_ids:
+                mutation = '''
+                    mutation productDelete($input: ProductDeleteInput!) {
+                        productDelete(input: $input) {
+                            deletedProductId
                         }
                     }
-                }
                 '''
 
-        response = client.post(f'https://{self.store_name}.myshopify.com/admin/api/2023-07/graphql.json',
-                               json={"query": query})
-        print(response)
-        print(response.json())
-        print('')
+                variables = {
+                    'input': {
+                        'id': product_id
+                    }
+                }
 
-    def check_bulk_operation_status(self, client, bulk_operation_id):
-        query = f'''
-            query {{
-                node(id: "{bulk_operation_id}") {{
-                    ... on BulkOperation {{
+                self.send_request(query=mutation, variables=variables)
+
+        except IndexError:
+            print('Item Not Found')
+
+    def remove_tags(self, product_id, tags):
+        print("Removing Tags...")
+        mutation = '''
+            mutation removeTags($id: ID!, $tags: [String!]!) {
+                tagsRemove(id: $id, tags: $tags) {
+                    node {
                         id
-                        status
-                    }}
-                }}
-            }}
+                    }
+                    userErrors {
+                        message
+                    }
+                }
+            }
         '''
+        remove_tags_variables = {
+            "id": product_id,
+            "tags": tags
+        }
 
-        response = client.post(f'https://{self.store_name}.myshopify.com/admin/api/2023-07/graphql.json',
-                               json={"query": query})
-
-        response_data = response.json()
-        status = response_data['data']['node']['status']
-        return status
+        return self.send_request(query=mutation, variables=remove_tags_variables)
 
 
 if __name__ == '__main__':
@@ -1713,7 +1723,7 @@ if __name__ == '__main__':
     # s.import_bulk_data(csv_file_path='./data/import201_test.csv', jsonl_file_path='./data/bulk_op_vars.jsonl', locationId='gid://shopify/Location/47387978') # prod
 
     # =============================== Update Files =============================
-    s.update_files_for_import(csv_file_path='./data/_chunk_3.csv', jsonl_file_path='./data/bulk_op_vars.jsonl', bulk=False)
+    # s.update_files_for_import(csv_file_path='./data/_chunk_3.csv', jsonl_file_path='./data/bulk_op_vars.jsonl', bulk=False)
 
     # ============================== pull operation status =============================
     # stopper = '0'
@@ -1778,3 +1788,6 @@ if __name__ == '__main__':
     # }
 
     # s.update_product(product_variables)
+
+    # ======================================= Update Product Bulk =======================================
+    # s.update_products_bulk(csv_file_path='./data/products_vendor_update.csv', jsonl_file_path='./data/product_update_vars.jsonl')
