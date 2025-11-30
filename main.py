@@ -662,36 +662,7 @@ class ShopifyApp:
 
         return self.send_request(query=query, variables=variables)
 
-    # ============================= get_products_with_query ==========================
-    # def get_products_with_query(self, variable_query):
-    #     print('Getting products..')
-    #     query = '''
-    #         query(
-    #             $query: String
-    #         )
-    #         {
-    #             products(first: 250, query: $query) {
-    #                 edges {
-    #                     node {
-    #                         handle
-    #                         id
-    #                         title
-    #                         metafield(key: "vendor_sku"){
-    #                             value
-    #                         }
-    #                     }
-    #                 }
-    #                 pageInfo {
-    #                     endCursor
-    #                     hasNextPage
-    #                 }
-    #             }
-    #         }
-    #     '''
-    #     variables = variable_query
-
-    #     return self.send_request(query=query, variables=variables)
-
+    # ============================= get_products_with_pagination =======================
     def get_products_with_pagination(self, variable_query, after=None):
         print('Getting products...')
         query = '''
@@ -710,6 +681,7 @@ class ShopifyApp:
                                 value
                             }
                             tags
+                            vendor
                         }
                     }
                     pageInfo {
@@ -828,6 +800,26 @@ class ShopifyApp:
         return self.send_request(query=query)
 
     # Update
+
+    # =================================== Update Products ================================
+    def update_product(self, product_variables):
+        print('Updating Products...')
+        product_mutation = '''
+            mutation productUpdate($product: ProductUpdateInput) {
+                productUpdate(product: $product) {
+                    product {
+                        id
+                    }
+                    userErrors {
+                        field
+                        message
+                    }
+                }
+            }
+        '''
+
+        return self.send_request(query=product_mutation, variables=product_variables)
+
     # ===================================== Publish Product ====================================
     def publish_product(self, product_id, publication_input):
         print("Publishing product...")
@@ -1026,47 +1018,6 @@ class ShopifyApp:
         '''
 
         return self.send_request(query=file_mutation, variables=file_variables)
-    
-    # def update_files(self, staged_target):
-    #     print('Update Files...')
-    #     mutation = '''
-    #         mutation ($stagedUploadPath: String!){
-    #             bulkOperationRunMutation(
-    #                 mutation: "mutation call($files: [FileUpdateInput!]!){
-    #                     fileUpdate(files: $files){
-    #                         files {
-    #                             id
-    #                             fileStatus
-    #                         }
-    #                         userErrors {
-    #                             message
-    #                             field
-    #                         } 
-    #                     }
-    #                 }",
-    #                 stagedUploadPath: $stagedUploadPath
-    #             )
-    #             {
-    #                 bulkOperation {
-    #                     id
-    #                     url
-    #                     status
-    #                 }
-    #                 userErrors {
-    #                     message
-    #                     field
-    #                 }
-    #             }
-    #         }
-    #     '''
-
-    #     variables = {
-    #         "stagedUploadPath": staged_target['data']['stagedUploadsCreate']['stagedTargets'][0]['parameters'][3]['value']
-    #     }
-
-    #     response = self.send_request(query=mutation, variables=variables)
-
-    #     return response
 
     def update_files(self, staged_target):
         print('Update Files...')
@@ -1101,33 +1052,39 @@ class ShopifyApp:
         df = pd.read_csv(csv_file_path)
         handles = df['Handle'].unique().tolist()
         
-        product_response = s.get_products_id_by_handle(handles=handles)
-        
+        product_response = self.get_products_id_by_handle(handles=handles)
+
         edges = product_response['data']['products']['edges']
         files = []
         for i, edge in enumerate(edges):
             for j, variant in enumerate(edge['node']['variants']['nodes']):
                 for k, variant_media in enumerate(variant['media']['nodes']):
-                    variant_file = {
+                    try:
+                        variant_file = {
                         'handle': edge['node']['handle'],
                         'id': variant_media['id'],
                         'alt': edge['node']['title'] + ' ' + 'Magic Cars Variant ' + str(j),
                         'url': variant_media['preview']['image']['url'],
                         'seq': str(j),
                         'src': 'magiccars-variant'
-                    }
-                    files.append(variant_file.copy())
+                        }
+                        files.append(variant_file.copy())
+                    except TypeError:
+                        pass                    
                     
             for l, media in enumerate(edge['node']['media']['nodes']):
-                media_file = {
+                try:
+                    media_file = {
                     'handle': edge['node']['handle'],
                     'id': media['id'],
                     'alt': edge['node']['title'] + ' ' + 'Magic Cars ' + str(l),
                     'url': media['preview']['image']['url'],
                     'seq': str(l),
                     'src': 'magiccars'
-                }
-                files.append(media_file.copy())
+                    }
+                    files.append(media_file.copy())
+                except TypeError:
+                    pass
 
         file_list_raw = []
         for file in files: 
@@ -1146,7 +1103,6 @@ class ShopifyApp:
             for item in chunked_file_list:
                 file_variables = {'files': item}
                 self.update_file(file_variables)
-                time.sleep(1)
         else:
             for item in chunked_file_list:
                 with open(jsonl_file_path, 'w', encoding='utf-8') as outfile:
@@ -1757,7 +1713,7 @@ if __name__ == '__main__':
     # s.import_bulk_data(csv_file_path='./data/import201_test.csv', jsonl_file_path='./data/bulk_op_vars.jsonl', locationId='gid://shopify/Location/47387978') # prod
 
     # =============================== Update Files =============================
-    # s.update_files_for_import(csv_file_path='./data/import200.csv', jsonl_file_path='./data/bulk_op_vars.jsonl', bulk=False)
+    s.update_files_for_import(csv_file_path='./data/_chunk_3.csv', jsonl_file_path='./data/bulk_op_vars.jsonl', bulk=False)
 
     # ============================== pull operation status =============================
     # stopper = '0'
@@ -1776,7 +1732,7 @@ if __name__ == '__main__':
     # var_query = {'query': "created_at>:{}".format('2025-08-15T04:24:54Z')}
     # records = []
     # var_query = {'query': "created_at:>'2025-08-15T04:24:54Z'"}
-    # s.get_products_id_by_handle(['weelye-24v-30000rpm-gearbox-24v-dc-motor-for-kids-ride-on-car-suv-parts-electr-33505'])
+    # s.get_products_id_by_handle(['zeophol-kids-ride-on-car-24v-4wd-2wd-switch-electric-power-wheels-truck-2-seats-15624'])
     # response = s.get_products_with_query(variable_query=var_query)
     # edges = response['data']['products']['edges']
     # record = [i['node'] for i in edges]
@@ -1795,22 +1751,30 @@ if __name__ == '__main__':
     # df = pd.DataFrame.from_records(records)
     # df.to_csv('data/uploaded_data.csv', index=False)
 
-    # =============================== get products using filter =============================
-    records = []
-    var_query = {'query': "created_at:>'2025-08-15T04:24:54Z'"}
-    cursor = None
-    has_next_page = True
+    # ======================================= Get Products by date =======================================
+    # records = []
+    # var_query = {'query': "created_at:>'2025-08-15T04:24:54Z'"}
+    # # var_query = {'query': "created_at:>'2025-09-04T00:00:00Z'"}
+    # cursor = None
+    # has_next_page = True
 
-    while has_next_page:
-        response = s.get_products_with_pagination(variable_query=var_query, after=cursor)
-        edges = response['data']['products']['edges']
-        record = [i['node'] for i in edges]
-        records.extend(record)
-        has_next_page = response['data']['products']['pageInfo']['hasNextPage']
-        cursor = response['data']['products']['pageInfo']['endCursor']
+    # while has_next_page:
+    #     response = s.get_products_with_pagination(variable_query=var_query, after=cursor)
+    #     edges = response['data']['products']['edges']
+    #     record = [i['node'] for i in edges]
+    #     records.extend(record)
+    #     has_next_page = response['data']['products']['pageInfo']['hasNextPage']
+    #     cursor = response['data']['products']['pageInfo']['endCursor']
 
-    df = pd.DataFrame.from_records(records)
-    df.to_csv('data/uploaded_data.csv', index=False)
+    # df = pd.DataFrame.from_records(records)
+    # df.to_csv('data/uploaded_data.csv', index=False)
 
-    # =============================== get_tags =============================
-    # s.get_product_tags()
+    # ======================================= Update Product Vendor =======================================
+    # product_variables = {
+    #     "product": {
+    #         "id": product_id,
+    #         "vendor": vendor
+    #     }
+    # }
+
+    # s.update_product(product_variables)
