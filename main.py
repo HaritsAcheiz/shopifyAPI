@@ -1563,6 +1563,66 @@ class ShopifyApp:
         response_data = response.json()
         status = response_data['data']['node']['status']
         return status
+    
+    def get_file(self, created_at, updated_at, after):
+        print("Fetching file data...")
+        if after == '':
+            query = '''
+                    query getFilesByCreatedAt($query:String!){
+                        files(first:250, query:$query) {
+                            edges {
+                                node {
+                                    ... on MediaImage {
+                                        id
+                                        alt
+                                        image {
+                                            id
+                                            altText
+                                            url
+                                        }
+                                    }
+                                }
+                            }
+                            pageInfo{
+                                hasNextPage
+                                endCursor
+                            }
+                        }
+                    }
+                    '''
+
+            variables = {'query': "(created_at:>={}) AND (updated_at:<={})".format(created_at, updated_at)}
+
+        else:
+
+            query = '''
+            query getFilesByCreatedAt($query:String!, $after:String!){
+                files(first:250, after:$after, query:$query) {
+                    edges {
+                        node {
+                            ... on MediaImage {
+                                id
+                                alt
+                                image {
+                                    id
+                                    altText
+                                    url
+                                }
+                            }
+                        }
+                    }
+                    pageInfo{
+                        hasNextPage
+                        endCursor
+                    }
+                }
+            }
+            '''
+
+            variables = {'query': "(created_at:>={}) AND (updated_at:<={})".format(created_at, updated_at),
+                         'after': after}
+            
+        return self.send_request(query=query, variables=variables)
 
     # Update
     # =================================== Update Products ================================
@@ -2020,6 +2080,26 @@ class ShopifyApp:
                     if response['data']['currentBulkOperation']['status'] == 'COMPLETED':
                         completed = True
 
+    def update_files_alt_text(self, csv_filepath, jsonl_file_path):
+        df = pd.read_csv(csv_filepath)
+        unique_df = df.drop_duplicates('id')
+        files = unique_df.to_dict('records')
+        chunked_file_list = self.chunk_list(files, chunk_size=50)
+        for item in chunked_file_list:
+                with open(jsonl_file_path, 'w', encoding='utf-8') as outfile:
+                    for data in item:
+                        outfile.write(json.dumps(data, ensure_ascii=False) + '\n')
+                print(f"Successfully converted file list to '{jsonl_file_path}'")
+                staged_target = self.generate_staged_target()
+                self.upload_jsonl(staged_target=staged_target, jsonl_path=jsonl_file_path)
+                self.update_files(staged_target=staged_target)
+                completed = False
+                while not completed:
+                    time.sleep(3)
+                    response = self.pool_operation_status()
+                    if response['data']['currentBulkOperation']['status'] == 'COMPLETED':
+                        completed = True
+
     # =================================== Publish Collection ================================
     def publish_collection(self, client):
         print('Publishing collection...')
@@ -2444,3 +2524,21 @@ if __name__ == '__main__':
     #     s.update_products_bulk(csv_file_path=filename, jsonl_file_path='./data/bulk_op_vars.jsonl')
     #     time.sleep(3)
     # s.update_products_bulk(csv_file_path='data/chunked_available_products/available_products_001.csv', jsonl_file_path='./data/bulk_op_vars.jsonl')
+
+    # =================================== Get Files by date =======================================
+    records = []
+    updated_at = '2025-12-15T00:00:00Z'
+    created_at = '2000-12-03T00:00:00Z'
+    cursor = ''
+    hasNextPage = True
+    while hasNextPage:
+        data = s.get_file(updated_at=updated_at, created_at=created_at, after=cursor)
+        file_records = data['data']['files']['edges']
+        records.extend(file_records)
+        hasNextPage = data['data']['files']['pageInfo']['hasNextPage']
+        cursor = data['data']['files']['pageInfo']['endCursor']
+    df = pd.DataFrame.from_records([i['node'] for i in records])
+    df.to_csv('/home/harits/Projects/magiccars/data/sources/all_files.csv', index=False)
+    
+    # =================================== Update Files Alt Text =======================================
+    # s.update_files_alt_text(csv_filepath='data/corrected_files_with_ebay_alttext.csv', jsonl_file_path='data/bulk_op_vars.jsonl')
