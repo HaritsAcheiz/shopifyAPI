@@ -10,6 +10,7 @@ import numpy as np
 import httpx
 import time
 import ast
+from glob import glob
 
 pd.options.display.max_columns = 100
 
@@ -21,23 +22,8 @@ class ShopifyApp:
     api_version: str = '2025-07'
 
     # Support
+
     # ==================================== Send Request ================================
-    # def send_request(self, query, variables=None):
-    #     if self.client:
-    #         response = self.client.post(
-    #             f'https://{self.store_name}.myshopify.com/admin/api/{self.api_version}/graphql.json',
-    #             json={"query": query, "variables": variables}
-    #         )
-
-    #         print(response)
-    #         print(response.json())
-    #         print('')
-
-    #         return response.json()
-
-    #     else:
-    #         print('Please create session before execute the function')
-
     def send_request(self, query, variables=None):
         if not self.client:
             print('Error: Please create a session before executing the function.')
@@ -190,6 +176,26 @@ class ShopifyApp:
         Args:
             csv_file_path (str): The path to the input CSV file.
             jsonl_file_path (str): The path where the output JSONL file will be saved.
+            mode (str): The conversion mode. Options:
+                - 'product': Create/update products with full details
+                - 'variant': Create/update product variants
+                - 'publish': Publish products to sales channels
+                - 'metafield': Update only product metafields
+            locationId (str, optional): Location ID for inventory operations (used with 'variant' mode).
+        
+        Supported Metafield Columns (for 'metafield' mode):
+            - Vendor SKU
+            - enable_best_price (product.metafields.custom.enable_best_price)
+            - arrives_before_christmas (product.metafields.custom.arrives_before_christmas)
+            - Or any custom column matching: {key} (product.metafields.custom.{key})
+        
+        Examples:
+            # Update products with metafields
+            app.csv_to_jsonl('data/products.csv', 'data/products.jsonl', mode='metafield')
+            
+            # Update metafields and bulk update
+            app.csv_to_jsonl('data/products.csv', 'data/products.jsonl', mode='metafield')
+            app.update_products_bulk('data/products.csv', 'data/products.jsonl')
         """
         try:
             # Using keep_default_na=False to prevent pandas from interpreting empty strings as NaN,
@@ -206,8 +212,7 @@ class ShopifyApp:
 
         # Group by 'Handle' first to process all rows for a product together
         # This simplifies gathering all options, media, and variants for a single product.
-        grouped_df = df.groupby('Handle').agg(
-            {
+        agg_dict = {
                 'Title': 'first',
                 'Body (HTML)': 'first',
                 'Vendor': 'first',
@@ -246,14 +251,22 @@ class ShopifyApp:
                 'Status': 'first',
                 'Available Qty': list,
                 'Vendor SKU': 'first',
-                'enable_best_price (product.metafields.custom.enable_best_price)': 'first'
+                'enable_best_price (product.metafields.custom.enable_best_price)': 'first',
+                'arrives_before_christmas (product.metafields.custom.arrives_before_christmas)': 'first',
+                'info_meta_text (product.metafields.custom.info_meta_text)': 'first'
             }
-        ).reset_index()
+        
+        # Add ID column if it exists in the CSV
+        if 'ID' in df.columns:
+            agg_dict['ID'] = 'first'
+        
+        grouped_df = df.groupby('Handle').agg(agg_dict).reset_index()
 
         if mode == 'product':
             for index, row in grouped_df.iterrows():
                 product_entry = {
                     'product': { 
+                        'id': str(row['ID']).strip() if 'ID' in row.index and row['ID'] else '',
                         'handle': row['Handle'],
                         'title': str(row['Title']).strip() if row['Title'] else '',
                         'descriptionHtml': str(row['Body (HTML)']).strip() if row['Body (HTML)'] else '',
@@ -298,11 +311,24 @@ class ShopifyApp:
 
                 metafields = []
                 if row['Vendor SKU']:
-                    vendorSKU = {'namespace': 'custom', 'key': 'vendor_sku', 'value': str(int(float(row['Vendor SKU']))), 'type': 'single_line_text_field'}
+                    try:
+                        vendorSKU = {'namespace': 'custom', 'key': 'vendor_sku', 'value': str(int(float(row['Vendor SKU']))), 'type': 'single_line_text_field'}
+                    except:
+                        vendorSKU = {'namespace': 'custom', 'key': 'vendor_sku', 'value': str(row['Vendor SKU']), 'type': 'single_line_text_field'}
                     metafields.append(vendorSKU)
                 if row['enable_best_price (product.metafields.custom.enable_best_price)']:
-                    enableBestPrice = {'namespace': 'custom', 'key': 'enable_best_price', 'value': row['enable_best_price (product.metafields.custom.enable_best_price)'], 'type': 'boolean'}
+                    # Convert boolean value to string
+                    enable_best_price_val = str(row['enable_best_price (product.metafields.custom.enable_best_price)']).lower()
+                    enableBestPrice = {'namespace': 'custom', 'key': 'enable_best_price', 'value': enable_best_price_val, 'type': 'boolean'}
                     metafields.append(enableBestPrice)
+                if row['arrives_before_christmas (product.metafields.custom.arrives_before_christmas)']:
+                    # Convert boolean value to string
+                    arrives_val = str(row['arrives_before_christmas (product.metafields.custom.arrives_before_christmas)']).lower()
+                    arrivesBeforeChristmas = {'namespace': 'custom', 'key': 'arrives_before_christmas', 'value': arrives_val, 'type': 'boolean'}
+                    metafields.append(arrivesBeforeChristmas)
+                if row['info_meta_text (product.metafields.custom.info_meta_text)']:
+                    infoMetaText = {'namespace': 'custom', 'key': 'info_meta_text', 'value': row['info_meta_text (product.metafields.custom.info_meta_text)'], 'type': 'single_line_text_field'}
+                    metafields.append(infoMetaText)
                 product_entry['product']['metafields'] = metafields
 
                 datas.append(product_entry)
@@ -428,6 +454,109 @@ class ShopifyApp:
                     }
                     publish_entry['input'] = publications
                     datas.append(publish_entry)
+
+        # if mode == 'metafield':
+        #     """
+        #     Update only metafields for existing products.
+        #     CSV must have 'Handle' column to identify products, and at least one metafield column.
+        #     Supported metafield columns:
+        #     - Vendor SKU
+        #     - enable_best_price (product.metafields.custom.enable_best_price)
+        #     - arrives_before_christmas (product.metafields.custom.arrives_before_christmas)
+        #     - Or any column matching pattern: {key} (product.metafields.custom.{key})
+        #     """
+        #     handles = grouped_df['Handle'].tolist()
+        #     response = self.get_products_id_by_handle(handles=handles)
+            
+        #     if response and 'data' in response and 'products' in response['data']:
+        #         edges = response['data']['products']['edges']
+        #         records = [x['node'] for x in edges]
+        #         product_id_df = pd.DataFrame.from_records(records)
+        #         grouped_id_df = pd.merge(grouped_df, product_id_df, how='left', left_on='Handle', right_on='handle')
+                
+        #         for index, row in grouped_id_df.iterrows():
+        #             # Only process products that were found
+        #             if pd.isna(row.get('id')) or row.get('id') == '':
+        #                 print(f"Warning: Product with handle '{row['Handle']}' not found in Shopify")
+        #                 continue
+                    
+        #             metafields = []
+                    
+        #             # Handle standard metafield columns
+        #             if 'Vendor SKU' in grouped_df.columns and row['Vendor SKU']:
+        #                 vendorSKU = {
+        #                     'namespace': 'custom',
+        #                     'key': 'vendor_sku',
+        #                     'value': str(int(float(row['Vendor SKU']))),
+        #                     'type': 'single_line_text_field'
+        #                 }
+        #                 metafields.append(vendorSKU)
+                    
+        #             if 'enable_best_price (product.metafields.custom.enable_best_price)' in grouped_df.columns and row['enable_best_price (product.metafields.custom.enable_best_price)']:
+        #                 enableBestPrice = {
+        #                     'namespace': 'custom',
+        #                     'key': 'enable_best_price',
+        #                     'value': str(row['enable_best_price (product.metafields.custom.enable_best_price)']).lower(),
+        #                     'type': 'boolean'
+        #                 }
+        #                 metafields.append(enableBestPrice)
+                    
+        #             if 'arrives_before_christmas (product.metafields.custom.arrives_before_christmas)' in grouped_df.columns and row['arrives_before_christmas (product.metafields.custom.arrives_before_christmas)']:
+        #                 arrivesBeforeChristmas = {
+        #                     'namespace': 'custom',
+        #                     'key': 'arrives_before_christmas',
+        #                     'value': str(row['arrives_before_christmas (product.metafields.custom.arrives_before_christmas)']).lower(),
+        #                     'type': 'boolean'
+        #                 }
+        #                 metafields.append(arrivesBeforeChristmas)
+                    
+        #             # Handle any other custom metafield columns (pattern: "key (product.metafields.custom.key)")
+        #             for col in grouped_df.columns:
+        #                 if '(product.metafields.custom.' in col and col not in [
+        #                     'Vendor SKU',
+        #                     'enable_best_price (product.metafields.custom.enable_best_price)',
+        #                     'arrives_before_christmas (product.metafields.custom.arrives_before_christmas)'
+        #                 ]:
+        #                     # Extract the key from the column name
+        #                     # Format: "key (product.metafields.custom.key)"
+        #                     try:
+        #                         start_idx = col.find('(product.metafields.custom.') + len('(product.metafields.custom.')
+        #                         end_idx = col.find(')', start_idx)
+        #                         metafield_key = col[start_idx:end_idx]
+        #                         metafield_value = row[col]
+                                
+        #                         if metafield_value and metafield_value != '':
+        #                             # Determine type based on content or default to single_line_text_field
+        #                             value_str = str(metafield_value).lower()
+        #                             if value_str in ['true', 'false']:
+        #                                 metafield_type = 'boolean'
+        #                                 metafield_value = value_str
+        #                             elif value_str.isdigit():
+        #                                 metafield_type = 'integer'
+        #                             else:
+        #                                 metafield_type = 'single_line_text_field'
+                                    
+        #                             metafield_entry = {
+        #                                 'namespace': 'custom',
+        #                                 'key': metafield_key,
+        #                                 'value': str(metafield_value),
+        #                                 'type': metafield_type
+        #                             }
+        #                             metafields.append(metafield_entry)
+        #                     except Exception as e:
+        #                         print(f"Warning: Could not parse metafield column '{col}': {e}")
+                    
+        #             # Only create entry if there are metafields to update
+        #             if metafields:
+        #                 metafield_entry = {
+        #                     'product': {
+        #                         'id': row['id'],
+        #                         'metafields': metafields
+        #                     }
+        #                 }
+        #                 datas.append(metafield_entry)
+        #     else:
+        #         print("Warning: Could not fetch products from Shopify")
 
         # Write product data to JSONL file
         with open(jsonl_file_path, 'w', encoding='utf-8') as outfile:
@@ -947,6 +1076,367 @@ class ShopifyApp:
 
         return self.send_request(query=query, variables=variables)
 
+    def get_products_with_filter(self, filters=None, after=None, first=250):
+        """
+        Fetches products with flexible filtering options.
+        
+        Args:
+            filters (dict): Filter options:
+                - 'handle': Single handle or list of handles
+                - 'title': Product title search
+                - 'vendor': Vendor name
+                - 'product_type': Product type
+                - 'tag': Tag name(s)
+                - 'created_at': Date range (e.g., ">2025-08-15T00:00:00Z" or ":'2025-08-01T00:00:00Z'..'2025-08-31T23:59:59Z'")
+                - 'updated_at': Date range
+                - 'status': ACTIVE, DRAFT, ARCHIVED
+                - 'has_only_default_variant': true/false
+                - 'published_status': published, unpublished, any
+                - 'inventory_total': For available products - use ">0" for in stock
+            after (str): Pagination cursor
+            first (int): Number of products per page (max 250)
+            
+        Returns:
+            dict: GraphQL response with products
+        """
+        print('Getting products with filters...')
+        
+        # Build query string from filters
+        query_parts = []
+        if filters:
+            if 'handle' in filters:
+                handles = filters['handle']
+                if isinstance(handles, str):
+                    handles = [handles]
+                handle_query = ','.join(handles)
+                query_parts.append(f"handle:{handle_query}")
+            
+            if 'title' in filters:
+                query_parts.append(f"title:*{filters['title']}*")
+            
+            if 'vendor' in filters:
+                query_parts.append(f"vendor:{filters['vendor']}")
+            
+            if 'product_type' in filters:
+                query_parts.append(f"product_type:{filters['product_type']}")
+            
+            if 'tag' in filters:
+                tags = filters['tag']
+                if isinstance(tags, str):
+                    tags = [tags]
+                for tag in tags:
+                    query_parts.append(f"tag:{tag}")
+            
+            if 'created_at' in filters:
+                query_parts.append(f"created_at:{filters['created_at']}")
+            
+            if 'updated_at' in filters:
+                query_parts.append(f"updated_at:{filters['updated_at']}")
+            
+            if 'status' in filters:
+                query_parts.append(f"status:{filters['status']}")
+            
+            if 'has_only_default_variant' in filters:
+                query_parts.append(f"has_only_default_variant:{str(filters['has_only_default_variant']).lower()}")
+            
+            if 'published_status' in filters:
+                query_parts.append(f"published_status:{filters['published_status']}")
+            
+            if 'inventory_total' in filters:
+                # inventory_total: ">0" = products with inventory
+                # inventory_total: "0" = products out of stock
+                query_parts.append(f"inventory_total:{filters['inventory_total']}")
+        
+        # Join all query parts with AND
+        query_string = ' AND '.join(query_parts) if query_parts else ''
+        
+        query = '''
+            query(
+                $query: String,
+                $after: String,
+                $first: Int
+            )
+            {
+                products(first: $first, query: $query, after: $after) {
+                    edges {
+                        node {
+                            id
+                            handle
+                            title
+                            description
+                            vendor
+                            productType
+                            tags
+                            status
+                            createdAt
+                            updatedAt
+                            seoTitle: metafield(key: "title", namespace: "global") {
+                                value
+                            }
+                            seoDescription: metafield(key: "description", namespace: "global") {
+                                value
+                            }
+                            metafield_vendor_sku: metafield(key: "vendor_sku", namespace: "custom"){
+                                value
+                            }
+                            metafield_enable_best_price: metafield(key: "enable_best_price", namespace: "custom"){
+                                value
+                            }
+                            metafield_arrives_before_christmas: metafield(key: "arrives_before_christmas", namespace: "custom"){
+                                value
+                            }
+                            metafield_info_meta_text: metafield(key: "info_meta_text", namespace: "custom"){
+                                value
+                            }
+                            isGiftCard
+                            variants(first: 100) {
+                                nodes {
+                                    id
+                                    sku
+                                    price
+                                    compareAtPrice
+                                    inventoryQuantity
+                                    barcode
+                                    inventoryItem {
+                                        measurement{
+                                            weight {
+                                                unit
+                                                value
+                                            }
+                                        }
+                                        tracked
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    pageInfo {
+                        endCursor
+                        hasNextPage
+                    }
+                }
+            }
+        '''
+        
+        variables = {
+            'query': query_string,
+            'first': first
+        }
+        
+        if after:
+            variables['after'] = after
+        
+        return self.send_request(query=query, variables=variables)
+
+    def fetch_all_products_with_filter(self, filters=None, first=250):
+        """
+        Fetches all products matching the filter criteria with automatic pagination.
+        Returns a pandas DataFrame with all headers needed for csv_to_jsonl function.
+        
+        Args:
+            filters (dict): Same filter options as get_products_with_filter()
+            first (int): Number of products per page (max 250)
+            
+        Returns:
+            pd.DataFrame: DataFrame with all columns required by csv_to_jsonl():
+                - Handle, Title, Body (HTML), Vendor, Product Category, Type, Tags, Published
+                - Status, Gift Card, SEO Title, SEO Description
+                - Option1/2/3 Name, Value, Linked To
+                - Variant SKU, Grams, Inventory Tracker, Policy, Fulfillment Service
+                - Variant Price, Compare At Price, Requires Shipping, Taxable, Barcode
+                - Variant Image, Weight Unit, Cost per item
+                - Image Src, Position, Alt Text
+                - Available Qty
+                - Vendor SKU, enable_best_price, arrives_before_christmas metafields
+        
+        Example:
+            # Fetch all in-stock products and convert to JSONL
+            df = app.fetch_all_products_with_filter({'inventory_total': '>0'})
+            app.csv_to_jsonl_from_dataframe(df, 'data/products.jsonl', mode='product')
+        """
+        print(f'Fetching all products with filters: {filters}...')
+        
+        records = []
+        cursor = None
+        has_next_page = True
+        page_count = 0
+        
+        while has_next_page:
+            page_count += 1
+            response = self.get_products_with_filter(filters=filters, after=cursor, first=first)
+            
+            if response and 'data' in response and 'products' in response['data']:
+                edges = response['data']['products']['edges']
+                products = [edge['node'] for edge in edges]
+                records.extend(products)
+                
+                print(f"Page {page_count}: Fetched {len(products)} products (Total: {len(records)})")
+                
+                page_info = response['data']['products']['pageInfo']
+                has_next_page = page_info.get('hasNextPage', False)
+                cursor = page_info.get('endCursor')
+            else:
+                print("Error: No valid response received")
+                break
+        
+        print(f"Completed fetching all {len(records)} products")
+        
+        # Convert to DataFrame with all required headers for csv_to_jsonl
+        df_rows = []
+        for product in records:
+            # Extract metafield values
+            vendor_sku = ''
+            enable_best_price = ''
+            arrives_before_christmas = ''
+            info_meta_text = ''
+            
+            # Helper function to get metafield value
+            def get_metafield_value(product, key):
+                # Note: The GraphQL response returns metafield as a single object, not a list
+                # Check if it exists and has a value
+                metafield_obj = product.get(f'metafield_{key}')
+                if metafield_obj and isinstance(metafield_obj, dict):
+                    return metafield_obj.get('value', '')
+                return ''
+            
+            vendor_sku = get_metafield_value(product, 'vendor_sku')
+            enable_best_price = get_metafield_value(product, 'enable_best_price')
+            arrives_before_christmas = get_metafield_value(product, 'arrives_before_christmas')
+            info_meta_text = get_metafield_value(product, 'info_meta_text')
+            
+            # Extract gift card flag
+            is_gift_card = product.get('isGiftCard', False)
+            gift_card_value = 'true' if is_gift_card else 'false'
+            
+            # Extract variant details
+            variants = product.get('variants', {}).get('nodes', [])
+            
+            # Create base row with product info
+            base_row = {
+                'ID': product.get('id', ''),
+                'Handle': product.get('handle', ''),
+                'Title': product.get('title', ''),
+                'Body (HTML)': product.get('description', ''),
+                'Vendor': product.get('vendor', ''),
+                'Product Category': 'gid://shopify/TaxonomyCategory/tg-5-20-1',  # Default category
+                'Type': product.get('productType', ''),
+                'Tags': ','.join(product.get('tags', [])) if product.get('tags') else '',
+                'Published': 'true',  # Default to published; adjust if needed
+                'Status': product.get('status', 'ACTIVE'),
+                'Gift Card': gift_card_value,
+                'SEO Title': '',
+                'SEO Description': '',
+                'Option1 Name': '',
+                'Option1 Value': '',
+                'Option1 Linked To': '',
+                'Option2 Name': '',
+                'Option2 Value': '',
+                'Option2 Linked To': '',
+                'Option3 Name': '',
+                'Option3 Value': '',
+                'Option3 Linked To': '',
+                'Vendor SKU': vendor_sku,
+                'enable_best_price (product.metafields.custom.enable_best_price)': enable_best_price,
+                'arrives_before_christmas (product.metafields.custom.arrives_before_christmas)': arrives_before_christmas,
+                'info_meta_text (product.metafields.custom.info_meta_text)': info_meta_text,
+            }
+            
+            # If no variants, add single empty row for the product
+            if not variants:
+                row = base_row.copy()
+                row.update({
+                    'Variant SKU': '',
+                    'Variant Grams': '',
+                    'Variant Inventory Tracker': 'shopify',
+                    'Variant Inventory Policy': 'deny',
+                    'Variant Fulfillment Service': 'manual',
+                    'Variant Price': '',
+                    'Variant Compare At Price': '',
+                    'Variant Requires Shipping': 'true',
+                    'Variant Taxable': 'true',
+                    'Variant Barcode': '',
+                    'Variant Image': '',
+                    'Variant Weight Unit': 'g',
+                    'Cost per item': '',
+                    'Image Src': '',
+                    'Image Position': '',
+                    'Image Alt Text': '',
+                    'Available Qty': '',
+                })
+                df_rows.append(row)
+            else:
+                # Add a row for each variant
+                for idx, variant in enumerate(variants):
+                    # Extract weight information from inventoryItem
+                    variant_grams = ''
+                    variant_weight_unit = 'g'
+                    variant_tracked = False
+                    
+                    inventory_item = variant.get('inventoryItem', {})
+                    if inventory_item and isinstance(inventory_item, dict):
+                        weight_obj = inventory_item.get('weight', {})
+                        if weight_obj and isinstance(weight_obj, dict):
+                            variant_grams = str(weight_obj.get('value', ''))
+                            weight_unit = weight_obj.get('unit', 'GRAMS')
+                            # Map Shopify weight units
+                            unit_map = {'KILOGRAMS': 'kg', 'GRAMS': 'g', 'POUNDS': 'lb', 'OUNCES': 'oz'}
+                            variant_weight_unit = unit_map.get(weight_unit, 'g')
+                        # detect whether this variant is inventory-tracked
+                        variant_tracked = bool(inventory_item.get('tracked', False))
+                    
+                    row = base_row.copy()
+                    row.update({
+                        'Variant SKU': variant.get('sku', ''),
+                        'Variant Grams': variant_grams,
+                        'Variant Inventory Tracker': 'shopify' if variant_tracked else '',
+                        'Variant Inventory Policy': 'deny',
+                        'Variant Fulfillment Service': 'manual',
+                        'Variant Price': str(variant.get('price', '')),
+                        'Variant Compare At Price': str(variant.get('compareAtPrice', '')) if variant.get('compareAtPrice') else '',
+                        'Variant Requires Shipping': 'true',
+                        'Variant Taxable': 'true',
+                        'Variant Barcode': variant.get('barcode', ''),
+                        'Variant Image': '',
+                        'Variant Weight Unit': variant_weight_unit,
+                        'Cost per item': '',
+                        'Image Src': '',
+                        'Image Position': '',
+                        'Image Alt Text': '',
+                        'Available Qty': str(variant.get('inventoryQuantity', '')),
+                    })
+                    df_rows.append(row)
+        
+        # Create DataFrame
+        df = pd.DataFrame(df_rows)
+        
+        # Ensure all required columns exist with empty strings as defaults
+        required_columns = [
+            'ID', 'Handle', 'Title', 'Body (HTML)', 'Vendor', 'Product Category', 'Type', 'Tags', 'Published',
+            'Option1 Name', 'Option1 Value', 'Option1 Linked To',
+            'Option2 Name', 'Option2 Value', 'Option2 Linked To',
+            'Option3 Name', 'Option3 Value', 'Option3 Linked To',
+            'Variant SKU', 'Variant Grams', 'Variant Inventory Tracker',
+            'Variant Inventory Policy', 'Variant Fulfillment Service',
+            'Variant Price', 'Variant Compare At Price', 'Variant Requires Shipping',
+            'Variant Taxable', 'Variant Barcode', 'Image Src', 'Image Position',
+            'Image Alt Text', 'Gift Card', 'SEO Title', 'SEO Description',
+            'Variant Image', 'Variant Weight Unit', 'Cost per item', 'Available Qty',
+            'Status', 'Vendor SKU',
+            'enable_best_price (product.metafields.custom.enable_best_price)',
+            'arrives_before_christmas (product.metafields.custom.arrives_before_christmas)',
+            'info_meta_text (product.metafields.custom.info_meta_text)'
+        ]
+        
+        for col in required_columns:
+            if col not in df.columns:
+                df[col] = ''
+        
+        # Reorder columns to match expected format
+        df = df[required_columns]
+        
+        print(f"Converted to DataFrame with {len(df)} rows and {len(df.columns)} columns")
+        return df
+
     # =================================== Publications =================================
     def query_publication(self):
         print("Fetching publications data...")
@@ -1073,6 +1563,66 @@ class ShopifyApp:
         response_data = response.json()
         status = response_data['data']['node']['status']
         return status
+    
+    def get_file(self, created_at, updated_at, after):
+        print("Fetching file data...")
+        if after == '':
+            query = '''
+                    query getFilesByCreatedAt($query:String!){
+                        files(first:250, query:$query) {
+                            edges {
+                                node {
+                                    ... on MediaImage {
+                                        id
+                                        alt
+                                        image {
+                                            id
+                                            altText
+                                            url
+                                        }
+                                    }
+                                }
+                            }
+                            pageInfo{
+                                hasNextPage
+                                endCursor
+                            }
+                        }
+                    }
+                    '''
+
+            variables = {'query': "(created_at:>={}) AND (updated_at:<={})".format(created_at, updated_at)}
+
+        else:
+
+            query = '''
+            query getFilesByCreatedAt($query:String!, $after:String!){
+                files(first:250, after:$after, query:$query) {
+                    edges {
+                        node {
+                            ... on MediaImage {
+                                id
+                                alt
+                                image {
+                                    id
+                                    altText
+                                    url
+                                }
+                            }
+                        }
+                    }
+                    pageInfo{
+                        hasNextPage
+                        endCursor
+                    }
+                }
+            }
+            '''
+
+            variables = {'query': "(created_at:>={}) AND (updated_at:<={})".format(created_at, updated_at),
+                         'after': after}
+            
+        return self.send_request(query=query, variables=variables)
 
     # Update
     # =================================== Update Products ================================
@@ -1093,6 +1643,143 @@ class ShopifyApp:
         '''
 
         return self.send_request(query=product_mutation, variables=product_variables)
+
+    # ============================== Update Products Bulk ==============================
+    def update_products_bulk(self, csv_file_path, jsonl_file_path):
+        """
+        Updates multiple products in bulk using CSV data.
+        
+        Args:
+            csv_file_path (str): Path to CSV file containing product update data.
+            jsonl_file_path (str): Path where JSONL file will be saved.
+        """
+        print(f'Updating products from {csv_file_path}...')
+        
+        # Verify CSV file exists first
+        if not os.path.isfile(csv_file_path):
+            print(f"Error: CSV file not found at '{csv_file_path}'")
+            return
+        
+        # Convert CSV to JSONL format - use product mode but we'll remove invalid fields
+        self.csv_to_jsonl(csv_file_path=csv_file_path, jsonl_file_path=jsonl_file_path, mode='product')
+        
+        # Verify JSONL file was created
+        if not os.path.isfile(jsonl_file_path):
+            print(f"Error: JSONL file was not created at '{jsonl_file_path}'. Check CSV conversion for errors.")
+            return
+        
+        # Clean the JSONL to remove fields not valid for ProductUpdateInput
+        self._clean_jsonl_for_update(jsonl_file_path)
+        
+        # Generate staged upload target
+        staged_target = self.generate_staged_target()
+        
+        # Upload JSONL file
+        self.upload_jsonl(staged_target=staged_target, jsonl_path=jsonl_file_path)
+        
+        # Execute bulk update mutation
+        self.update_products(staged_target=staged_target)
+        
+        # Wait for operation to complete
+        completed = False
+        while not completed:
+            time.sleep(3)
+            response = self.pool_operation_status()
+            if response['data']['currentBulkOperation']['status'] == 'COMPLETED':
+                completed = True
+                print('Product update is completed')
+
+    def _clean_jsonl_for_update(self, jsonl_file_path):
+        """
+        Remove fields from JSONL that are not valid for ProductUpdateInput.
+        ProductUpdateInput does not support: productOptions, giftCard
+        """
+        import json
+        cleaned_lines = []
+        
+        with open(jsonl_file_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                try:
+                    data = json.loads(line)
+                    if 'product' in data:
+                        # Remove productOptions and giftCard
+                        data['product'].pop('productOptions', None)
+                        data['product'].pop('giftCard', None)
+                        # Keep only id/handle + updatable fields
+                        product = data['product']
+                        cleaned_product = {
+                            'id': product.get('id'),
+                            'handle': product.get('handle'),
+                            'title': product.get('title'),
+                            'descriptionHtml': product.get('descriptionHtml'),
+                            'vendor': product.get('vendor'),
+                            'productType': product.get('productType'),
+                            'tags': product.get('tags'),
+                            'seo': product.get('seo'),
+                            'status': product.get('status'),
+                            'metafields': product.get('metafields'),
+                        }
+                        # Remove None values, but ALWAYS keep id (required for mutation)
+                        cleaned_product = {k: v for k, v in cleaned_product.items() if (k == 'id') or (v is not None and v != '')}
+                        data['product'] = cleaned_product
+                    cleaned_lines.append(json.dumps(data, ensure_ascii=False))
+                except json.JSONDecodeError:
+                    cleaned_lines.append(line.rstrip('\n'))
+        
+        # Write cleaned JSONL back
+        with open(jsonl_file_path, 'w', encoding='utf-8') as f:
+            for line in cleaned_lines:
+                f.write(line + '\n')
+
+    def update_products(self, staged_target):
+        """
+        Executes the bulk mutation to update products.
+        
+        Args:
+            staged_target (dict): Staged upload target containing the JSONL file path.
+        
+        Returns:
+            dict: Response from the bulk operation mutation.
+        """
+        print('Updating products in bulk...')
+        mutation = '''
+            mutation ($stagedUploadPath: String!){
+                bulkOperationRunMutation(
+                    mutation: "mutation call($product: ProductUpdateInput){
+                        productUpdate(product: $product){
+                            product{
+                                id
+                                handle
+                            }
+                            userErrors {
+                                message
+                                field
+                            } 
+                        }
+                    }",
+                    stagedUploadPath: $stagedUploadPath
+                )
+                {
+                    bulkOperation {
+                        id
+                        url
+                        status
+                    }
+                    userErrors {
+                        message
+                        field
+                    }
+                }
+            }
+        '''
+
+        variables = {
+            "stagedUploadPath": staged_target['data']['stagedUploadsCreate']['stagedTargets'][0]['parameters'][3]['value']
+        }
+
+        response = self.send_request(query=mutation, variables=variables)
+
+        return response
 
     # ===================================== Publish Product ====================================
     def publish_product(self, product_id, publication_input):
@@ -1379,6 +2066,26 @@ class ShopifyApp:
                 self.update_file(file_variables)
         else:
             for item in chunked_file_list:
+                with open(jsonl_file_path, 'w', encoding='utf-8') as outfile:
+                    for data in item:
+                        outfile.write(json.dumps(data, ensure_ascii=False) + '\n')
+                print(f"Successfully converted file list to '{jsonl_file_path}'")
+                staged_target = self.generate_staged_target()
+                self.upload_jsonl(staged_target=staged_target, jsonl_path=jsonl_file_path)
+                self.update_files(staged_target=staged_target)
+                completed = False
+                while not completed:
+                    time.sleep(3)
+                    response = self.pool_operation_status()
+                    if response['data']['currentBulkOperation']['status'] == 'COMPLETED':
+                        completed = True
+
+    def update_files_alt_text(self, csv_filepath, jsonl_file_path):
+        df = pd.read_csv(csv_filepath)
+        unique_df = df.drop_duplicates('id')
+        files = unique_df.to_dict('records')
+        chunked_file_list = self.chunk_list(files, chunk_size=50)
+        for item in chunked_file_list:
                 with open(jsonl_file_path, 'w', encoding='utf-8') as outfile:
                     for data in item:
                         outfile.write(json.dumps(data, ensure_ascii=False) + '\n')
@@ -1692,6 +2399,8 @@ if __name__ == '__main__':
 
     # =========================== Delete Products By Handle ============================
     # handles = ['christmas-gift-electric-ride-on-toy-car-for-kids-12v-battery-powered-with-remote-control']
+    # df = pd.read_csv('data/product_handles_with_promotion_issue.csv')
+    # handles = df['Handle'].tolist()
     # s.delete_products_by_handle(handles=handles)
 
     # =========================== Get Product Id By Handle ============================
@@ -1789,5 +2498,47 @@ if __name__ == '__main__':
 
     # s.update_product(product_variables)
 
-    # ======================================= Update Product Bulk =======================================
-    # s.update_products_bulk(csv_file_path='./data/products_vendor_update.csv', jsonl_file_path='./data/product_update_vars.jsonl')
+    # ======================================= Fetch Products with Filter =======================================
+    # products = s.fetch_all_products_with_filter(
+        # filters={'inventory_total': '>0'}
+        # filters={'status': 'ACTIVE'}
+        # filters = {'handle': 'magic-cars-best-toy-train-ride-on-for-children-w-parental-control-and-working-stack'}
+    # )
+
+    # df = pd.DataFrame(products)
+
+    # df.to_csv('data/active_products_with_inventory.csv', index=False)
+
+    # =================================== Bulk Update Products ==================================
+    # df = pd.read_csv('data/active_products_with_inventory.csv')
+    # active_products = df[df['Status'] == 'ACTIVE']
+
+    # available_products = df[(pd.isna(df['Variant Inventory Tracker'])) | ((df['Variant Inventory Tracker'] == 'shopify') & (df['Available Qty'] > 0))]
+    # available_products['info_meta_text (product.metafields.custom.info_meta_text)'] = available_products['info_meta_text (product.metafields.custom.info_meta_text)'].apply(lambda x: 'Arrives Before Christmas' if (pd.isna(x) or x == 'Arrives Before Christmas') else x + '|Arrives Before Christmas')
+    # available_products.to_csv('data/available_products.csv', index=False)
+
+    # s.chunk_shopify_csv_by_product(input_csv_path='data/available_products.csv', output_directory='./data/chunked_available_products', products_per_chunk=200)
+    
+    # filenames = glob('./data/chunked_available_products/*.csv')
+    # for filename in filenames:
+    #     s.update_products_bulk(csv_file_path=filename, jsonl_file_path='./data/bulk_op_vars.jsonl')
+    #     time.sleep(3)
+    # s.update_products_bulk(csv_file_path='data/chunked_available_products/available_products_001.csv', jsonl_file_path='./data/bulk_op_vars.jsonl')
+
+    # =================================== Get Files by date =======================================
+    records = []
+    updated_at = '2025-12-15T00:00:00Z'
+    created_at = '2000-12-03T00:00:00Z'
+    cursor = ''
+    hasNextPage = True
+    while hasNextPage:
+        data = s.get_file(updated_at=updated_at, created_at=created_at, after=cursor)
+        file_records = data['data']['files']['edges']
+        records.extend(file_records)
+        hasNextPage = data['data']['files']['pageInfo']['hasNextPage']
+        cursor = data['data']['files']['pageInfo']['endCursor']
+    df = pd.DataFrame.from_records([i['node'] for i in records])
+    df.to_csv('/home/harits/Projects/magiccars/data/sources/all_files.csv', index=False)
+    
+    # =================================== Update Files Alt Text =======================================
+    # s.update_files_alt_text(csv_filepath='data/corrected_files_with_ebay_alttext.csv', jsonl_file_path='data/bulk_op_vars.jsonl')
