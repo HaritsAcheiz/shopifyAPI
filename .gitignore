@@ -121,8 +121,7 @@ celerybeat.pid
 *.sage.py
 
 # Environments
-.env
-.prd.env
+*.env
 .venv
 env/
 venv/
@@ -171,3 +170,4 @@ data/products_export_2.csv
 location.json
 data/*
 data.zip
+data/bulk_op_vars.jsonl
