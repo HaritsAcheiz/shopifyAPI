@@ -2184,7 +2184,7 @@ class ShopifyApp:
 
 if __name__ == '__main__':
     # Usage
-    load_dotenv('./.prd.env')
+    load_dotenv('./.dev.env')
 
     # ============================== Create Session ====================================
     s = ShopifyApp(
@@ -2205,7 +2205,7 @@ if __name__ == '__main__':
     # s.query_publication()
 
     # ============================== Query Locations ================================
-    # s.query_locations()
+    s.query_locations()
 
     # ================================ Create Product ==================================
     # variables = {
@@ -2526,19 +2526,19 @@ if __name__ == '__main__':
     # s.update_products_bulk(csv_file_path='data/chunked_available_products/available_products_001.csv', jsonl_file_path='./data/bulk_op_vars.jsonl')
 
     # =================================== Get Files by date =======================================
-    records = []
-    updated_at = '2025-12-15T00:00:00Z'
-    created_at = '2000-12-03T00:00:00Z'
-    cursor = ''
-    hasNextPage = True
-    while hasNextPage:
-        data = s.get_file(updated_at=updated_at, created_at=created_at, after=cursor)
-        file_records = data['data']['files']['edges']
-        records.extend(file_records)
-        hasNextPage = data['data']['files']['pageInfo']['hasNextPage']
-        cursor = data['data']['files']['pageInfo']['endCursor']
-    df = pd.DataFrame.from_records([i['node'] for i in records])
-    df.to_csv('/home/harits/Projects/magiccars/data/sources/all_files.csv', index=False)
+    # records = []
+    # updated_at = '2025-12-15T00:00:00Z'
+    # created_at = '2000-12-03T00:00:00Z'
+    # cursor = ''
+    # hasNextPage = True
+    # while hasNextPage:
+    #     data = s.get_file(updated_at=updated_at, created_at=created_at, after=cursor)
+    #     file_records = data['data']['files']['edges']
+    #     records.extend(file_records)
+    #     hasNextPage = data['data']['files']['pageInfo']['hasNextPage']
+    #     cursor = data['data']['files']['pageInfo']['endCursor']
+    # df = pd.DataFrame.from_records([i['node'] for i in records])
+    # df.to_csv('/home/harits/Projects/magiccars/data/sources/all_files.csv', index=False)
     
     # =================================== Update Files Alt Text =======================================
     # s.update_files_alt_text(csv_filepath='data/corrected_files_with_ebay_alttext.csv', jsonl_file_path='data/bulk_op_vars.jsonl')
