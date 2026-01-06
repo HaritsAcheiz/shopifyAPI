@@ -2205,7 +2205,7 @@ if __name__ == '__main__':
     # s.query_publication()
 
     # ============================== Query Locations ================================
-    s.query_locations()
+    # s.query_locations()
 
     # ================================ Create Product ==================================
     # variables = {
