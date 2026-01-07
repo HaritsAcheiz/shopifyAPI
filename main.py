@@ -944,9 +944,9 @@ class ShopifyApp:
 
         self.send_request(query=query)
 
-    # ============================= get_products_id_by_handle ==========================
-    def get_products_id_by_handle(self, handles):
-        print('Getting product id...')
+    # ============================= get_products_media_by_handle ==========================
+    def get_products_media_by_handle(self, handles):
+        print('Getting product media...')
         f_handles = ','.join(handles)
         query = '''
             query(
@@ -987,6 +987,32 @@ class ShopifyApp:
                                     }
                                 }
                             }
+                        }
+                    }
+                    pageInfo {
+                        endCursor
+                        hasNextPage
+                    }
+                }
+            }
+        '''
+        variables = {'query': "handle:{}".format(f_handles)}
+
+        return self.send_request(query=query, variables=variables)
+
+    def get_products_id_by_handle(self, handles):
+        print('Getting product id...')
+        f_handles = ','.join(handles)
+        query = '''
+            query(
+                $query: String
+            )
+            {
+                products(first: 250, query: $query) {
+                    edges {
+                        node {
+                            handle
+                            id
                         }
                     }
                     pageInfo {
@@ -2013,7 +2039,7 @@ class ShopifyApp:
         df = pd.read_csv(csv_file_path)
         handles = df['Handle'].unique().tolist()
         
-        product_response = self.get_products_id_by_handle(handles=handles)
+        product_response = self.get_products_media_by_handle(handles=handles)
 
         edges = product_response['data']['products']['edges']
         files = []
@@ -2131,6 +2157,76 @@ class ShopifyApp:
         print(response.json())
         print('')
 
+    def update_product_descriptions(self, staged_target):
+        print('Updating product descriptions...')
+        mutation = '''
+            mutation productUpdateBulk($stagedUploadPath: String!){
+                bulkOperationRunMutation(
+                    mutation: "mutation call($product: ProductUpdateInput!){
+                        productUpdate(product: $product){
+                            product{
+                                id
+                                handle
+                            }
+                            userErrors {
+                                message
+                                field
+                            } 
+                        }
+                    }",
+                    stagedUploadPath: $stagedUploadPath
+                )
+                {
+                    bulkOperation {
+                        id
+                        url
+                        status
+                    }
+                    userErrors {
+                        field
+                        message
+                    }
+                }
+            }
+        '''
+
+        variables = {
+            "stagedUploadPath": staged_target['data']['stagedUploadsCreate']['stagedTargets'][0]['parameters'][3]['value']
+        }
+
+        response = self.send_request(query=mutation, variables=variables)
+
+        return response
+
+    # ===================================== Update Product Description ====================================
+    def bulk_update_product_descriptions(self, csv_filepath, jsonl_file_path):
+        df = pd.read_csv(csv_filepath, usecols=['Handle', 'Body (HTML)', 'formatted_description'])
+        response = self.get_products_id_by_handle(handles=df['Handle'].tolist())
+        nodes = response['data']['products']['edges']
+        records = [node['node'] for node in nodes]
+        id_df = pd.DataFrame(records)
+        df_with_id = pd.merge(df, id_df, left_on='Handle', right_on='handle', how='left')
+        unique_df = df_with_id.drop_duplicates('id')
+        unique_df.drop(columns=['Body (HTML)', 'handle', 'Handle'], inplace=True)
+        unique_df.rename(columns={'formatted_description':'descriptionHtml'}, inplace=True)
+        products = unique_df.to_dict('records')
+        formatted_products = [{'product': product} for product in products]
+        chunked_product_list = self.chunk_list(formatted_products, chunk_size=50)
+        for item in chunked_product_list:
+                with open(jsonl_file_path, 'w', encoding='utf-8') as outfile:
+                    for data in item:
+                        outfile.write(json.dumps(data, ensure_ascii=False) + '\n')
+                print(f"Successfully converted product list to '{jsonl_file_path}'")
+                staged_target = self.generate_staged_target()
+                self.upload_jsonl(staged_target=staged_target, jsonl_path=jsonl_file_path)
+                self.update_product_descriptions(staged_target=staged_target)
+                completed = False
+                while not completed:
+                    time.sleep(3)
+                    response = self.pool_operation_status()
+                    if response['data']['currentBulkOperation']['status'] == 'COMPLETED':
+                        completed = True
+
     # Delete
     # ===================================== Product ====================================
     def delete_products_by_handle(self, handles):
@@ -2184,7 +2280,7 @@ class ShopifyApp:
 
 if __name__ == '__main__':
     # Usage
-    load_dotenv('./.dev.env')
+    load_dotenv('./.magiccars.env')
 
     # ============================== Create Session ====================================
     s = ShopifyApp(
@@ -2542,3 +2638,6 @@ if __name__ == '__main__':
     
     # =================================== Update Files Alt Text =======================================
     # s.update_files_alt_text(csv_filepath='data/corrected_files_with_ebay_alttext.csv', jsonl_file_path='data/bulk_op_vars.jsonl')
+
+    # =================================== Bulk_Update Description ==========================================
+    s.bulk_update_product_descriptions(csv_filepath='/home/harits/Projects/shopifyAPI/data/magiccars_sample_formatting_progress.csv', jsonl_file_path='data/bulk_op_vars.jsonl')
