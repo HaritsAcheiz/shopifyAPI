@@ -2347,19 +2347,7 @@ class ShopifyApp:
     #                 if response['data']['currentBulkOperation']['status'] == 'COMPLETED':
     #                     completed = True
 
-    def update_product_options(self, staged_target):
-        print('Updating product options...')
-        mutation = '''
-            mutation productOptionUpdateBulk($stagedUploadPath: String!){
-                bulkOperationRunMutation(
-                    mutation: "mutation updateOption($productId: ID!, $option: OptionUpdateInput!){
-                        productOptionUpdate(productId: $productId, option: $option){
-                            product{
-                                id
-                                options {
-                                    id
-                                    name
-                                }
+    
     def update_product_templates(self, staged_target):
         print('Updating product templates...')
         mutation = '''
@@ -3096,7 +3084,6 @@ if __name__ == '__main__':
     s.bulk_update_option_names(csv_filepath='/home/harits/Projects/shopifyAPI/data/corrected_custome_issue_products.csv', jsonl_file_path='data/bulk_op_vars.jsonl')
 
 
-    
     # s.bulk_update_product_descriptions(csv_filepath='/home/harits/Projects/shopifyAPI/data/magiccars_sample_formatting_progress.csv', jsonl_file_path='data/bulk_op_vars.jsonl')
 
     # =================================== Bulk Update Template =============================================
