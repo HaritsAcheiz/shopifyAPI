@@ -2227,6 +2227,80 @@ class ShopifyApp:
                     if response['data']['currentBulkOperation']['status'] == 'COMPLETED':
                         completed = True
 
+    def update_product_templates(self, staged_target):
+        print('Updating product templates...')
+        mutation = '''
+            mutation productUpdateBulk($stagedUploadPath: String!){
+                bulkOperationRunMutation(
+                    mutation: "mutation call($product: ProductUpdateInput!){
+                        productUpdate(product: $product){
+                            product{
+                                id
+                                handle
+                            }
+                            userErrors {
+                                message
+                                field
+                            } 
+                        }
+                    }",
+                    stagedUploadPath: $stagedUploadPath
+                )
+                {
+                    bulkOperation {
+                        id
+                        url
+                        status
+                    }
+                    userErrors {
+                        field
+                        message
+                    }
+                }
+            }
+        '''
+
+        variables = {
+            "stagedUploadPath": staged_target['data']['stagedUploadsCreate']['stagedTargets'][0]['parameters'][3]['value']
+        }
+
+        response = self.send_request(query=mutation, variables=variables)
+
+        return response
+
+    # ===================================== Update Product templates ====================================
+    def bulk_update_product_templates(self, csv_filepath, jsonl_file_path):
+        df = pd.read_csv(csv_filepath, usecols=['Handle', 'Title'])
+        df = df[pd.notna(df['Title'])]
+        handles = df['Handle'].tolist()
+        chunked_handles = self.chunk_list(handles)
+        for chunked_handle in chunked_handles:
+            response = self.get_products_id_by_handle(handles=chunked_handle)
+            nodes = response['data']['products']['edges']
+            records = [node['node'] for node in nodes]
+            id_df = pd.DataFrame(records)
+            df_with_id = pd.merge(df, id_df, left_on='Handle', right_on='handle', how='left')
+            unique_df = df_with_id.drop_duplicates('id')
+            unique_df.drop(columns=['handle', 'Handle', 'Title'], inplace=True)
+            unique_df['templateSuffix'] = 'parts'
+            products = unique_df.to_dict('records')
+            formatted_products = [{'product': product} for product in products]
+            chunked_product_list = self.chunk_list(formatted_products, chunk_size=50)
+            for item in chunked_product_list:
+                    with open(jsonl_file_path, 'w', encoding='utf-8') as outfile:
+                        for data in item:
+                            outfile.write(json.dumps(data, ensure_ascii=False) + '\n')
+                    print(f"Successfully converted product list to '{jsonl_file_path}'")
+                    staged_target = self.generate_staged_target()
+                    self.upload_jsonl(staged_target=staged_target, jsonl_path=jsonl_file_path)
+                    self.update_product_templates(staged_target=staged_target)
+                    completed = False
+                    while not completed:
+                        time.sleep(3)
+                        response = self.pool_operation_status()
+                        if response['data']['currentBulkOperation']['status'] == 'COMPLETED':
+                            completed = True
+
     # Delete
     # ===================================== Product ====================================
     def delete_products_by_handle(self, handles):
@@ -2280,7 +2354,7 @@ class ShopifyApp:
 
 if __name__ == '__main__':
     # Usage
-    load_dotenv('./.magiccars.env')
+    load_dotenv('C:/Users/alpha/Projects/shopifyAPI/.magiccars.env')
 
     # ============================== Create Session ====================================
     s = ShopifyApp(
@@ -2640,4 +2714,7 @@ if __name__ == '__main__':
     # s.update_files_alt_text(csv_filepath='data/corrected_files_with_ebay_alttext.csv', jsonl_file_path='data/bulk_op_vars.jsonl')
 
     # =================================== Bulk_Update Description ==========================================
-    s.bulk_update_product_descriptions(csv_filepath='/home/harits/Projects/shopifyAPI/data/magiccars_sample_formatting_progress.csv', jsonl_file_path='data/bulk_op_vars.jsonl')
+    # s.bulk_update_product_descriptions(csv_filepath='/home/harits/Projects/shopifyAPI/data/magiccars_sample_formatting_progress.csv', jsonl_file_path='data/bulk_op_vars.jsonl')
+
+    # =================================== Bulk Update Template =============================================
+    s.bulk_update_product_templates(csv_filepath='C:/Users/alpha/Projects/shopifyAPI/data/shopify_import_complete.csv', jsonl_file_path='C:/Users/alpha/Projects/shopifyAPI/data/bulk_op_vars.jsonl')
