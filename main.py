@@ -1002,29 +1002,70 @@ class ShopifyApp:
 
     def get_products_id_by_handle(self, handles):
         print('Getting product id...')
-        f_handles = ','.join(handles)
-        query = '''
-            query(
-                $query: String
-            )
-            {
-                products(first: 250, query: $query) {
-                    edges {
-                        node {
-                            handle
-                            id
+        all_products = []
+        
+        # Split handles into batches of 250 (Shopify's limit for query filters)
+        batch_size = 250
+        handle_batches = [handles[i:i + batch_size] for i in range(0, len(handles), batch_size)]
+        
+        for batch_index, handle_batch in enumerate(handle_batches):
+            print(f'Processing batch {batch_index + 1}/{len(handle_batches)}...')
+            f_handles = ','.join(handle_batch)
+            
+            query = '''
+                query($query: String, $cursor: String) {
+                    products(first: 250, query: $query, after: $cursor) {
+                        edges {
+                            node {
+                                handle
+                                id
+                            }
+                        }
+                        pageInfo {
+                            endCursor
+                            hasNextPage
                         }
                     }
-                    pageInfo {
-                        endCursor
-                        hasNextPage
+                }
+            '''
+            
+            variables = {'query': "handle:{}".format(f_handles), 'cursor': None}
+            
+            # Pagination loop for each batch
+            has_next_page = True
+            while has_next_page:
+                response = self.send_request(query=query, variables=variables)
+                
+                if not response or 'data' not in response:
+                    print(f"Error retrieving products for batch {batch_index + 1}")
+                    break
+                
+                edges = response['data']['products']['edges']
+                all_products.extend(edges)
+                
+                page_info = response['data']['products']['pageInfo']
+                has_next_page = page_info['hasNextPage']
+                
+                if has_next_page:
+                    variables['cursor'] = page_info['endCursor']
+                    print(f"Fetching next page for batch {batch_index + 1}...")
+                else:
+                    variables['cursor'] = None  # Reset cursor for next batch
+        
+        print(f'Retrieved {len(all_products)} products in total.')
+        
+        # Return in the same format as original function
+        return {
+            'data': {
+                'products': {
+                    'edges': all_products,
+                    'pageInfo': {
+                        'endCursor': None,
+                        'hasNextPage': False
                     }
                 }
             }
-        '''
-        variables = {'query': "handle:{}".format(f_handles)}
-
-        return self.send_request(query=query, variables=variables)
+        }
 
     # ============================= get_products_with_pagination =======================
     def get_products_with_pagination(self, variable_query, after=None):
@@ -2227,6 +2268,352 @@ class ShopifyApp:
                     if response['data']['currentBulkOperation']['status'] == 'COMPLETED':
                         completed = True
 
+    # def update_product_options(self, staged_target):
+    #     print('Updating product options...')
+    #     mutation = '''
+    #         mutation productUpdateBulk($stagedUploadPath: String!){
+    #             bulkOperationRunMutation(
+    #                 mutation: "mutation call($product: ProductUpdateInput!){
+    #                     productUpdate(product: $product){
+    #                         product{
+    #                             id
+    #                             handle
+    #                         }
+    #                         userErrors {
+    #                             message
+    #                             field
+    #                         } 
+    #                     }
+    #                 }",
+    #                 stagedUploadPath: $stagedUploadPath
+    #             )
+    #             {
+    #                 bulkOperation {
+    #                     id
+    #                     url
+    #                     status
+    #                 }
+    #                 userErrors {
+    #                     field
+    #                     message
+    #                 }
+    #             }
+    #         }
+    #     '''
+
+    #     variables = {
+    #         "stagedUploadPath": staged_target['data']['stagedUploadsCreate']['stagedTargets'][0]['parameters'][3]['value']
+    #     }
+
+    #     response = self.send_request(query=mutation, variables=variables)
+
+    #     return response    
+
+    # # ===================================== Update Option Names ====================================
+    # def bulk_update_option_names(self, csv_filepath, jsonl_file_path):
+    #     df = pd.read_csv(csv_filepath)
+        
+    #     # sample
+    #     df = df[:5]
+
+    #     response = self.get_products_id_by_handle(handles=df['Handle'].tolist())
+    #     nodes = response['data']['products']['edges']
+    #     records = [node['node'] for node in nodes]
+    #     id_df = pd.DataFrame(records)
+    #     df_with_id = pd.merge(df, id_df, left_on='Handle', right_on='handle', how='left')
+    #     unique_df = df_with_id.drop_duplicates('id')
+    #     unique_df.drop(columns=['Option2 Name', 'Option3 Name', 'handle', 'Handle'], inplace=True)
+    #     unique_df.rename(columns={'Fixed Option2 Name':'Option2 Name', 'Fixed Option3 Name':'Option3 Name'}, inplace=True)
+    #     unique_df['productOptions'] = unique_df[['Option1 Name', 'Option2 Name', 'Option3 Name']].apply(
+    #         lambda row: [{'name': x} for x in row if x is not None and (isinstance(x, str) or x == x)], axis=1
+    #     )
+    #     unique_df = unique_df[['id', 'productOptions']]
+    #     products = unique_df.to_dict('records')
+    #     formatted_products = [{'product': product} for product in products]
+
+    #     chunked_product_list = self.chunk_list(formatted_products, chunk_size=50)
+    #     for item in chunked_product_list:
+    #             with open(jsonl_file_path, 'w', encoding='utf-8') as outfile:
+    #                 for data in item:
+    #                     outfile.write(json.dumps(data, ensure_ascii=False) + '\n')
+    #             print(f"Successfully converted product list to '{jsonl_file_path}'")
+    #             staged_target = self.generate_staged_target()
+    #             self.upload_jsonl(staged_target=staged_target, jsonl_path=jsonl_file_path)
+    #             self.update_product_options(staged_target=staged_target)
+    #             completed = False
+    #             while not completed:
+    #                 time.sleep(3)
+    #                 response = self.pool_operation_status()
+    #                 if response['data']['currentBulkOperation']['status'] == 'COMPLETED':
+    #                     completed = True
+
+    def update_product_options(self, staged_target):
+        print('Updating product options...')
+        mutation = '''
+            mutation productOptionUpdateBulk($stagedUploadPath: String!){
+                bulkOperationRunMutation(
+                    mutation: "mutation updateOption($productId: ID!, $option: OptionUpdateInput!){
+                        productOptionUpdate(productId: $productId, option: $option){
+                            product{
+                                id
+                                options {
+                                    id
+                                    name
+                                }
+                            }
+                            userErrors {
+                                message
+                                field
+                            } 
+                        }
+                    }",
+                    stagedUploadPath: $stagedUploadPath
+                )
+                {
+                    bulkOperation {
+                        id
+                        url
+                        status
+                    }
+                    userErrors {
+                        field
+                        message
+                    }
+                }
+            }
+        '''
+        variables = {
+            "stagedUploadPath": staged_target['data']['stagedUploadsCreate']['stagedTargets'][0]['parameters'][3]['value']
+        }
+        response = self.send_request(query=mutation, variables=variables)
+        return response
+
+    def get_product_options_with_ids(self, product_ids):
+        """Fetch product options with their IDs"""
+        query = '''
+            query getProductOptions($ids: [ID!]!) {
+                nodes(ids: $ids) {
+                    ... on Product {
+                        id
+                        options {
+                            id
+                            name
+                            position
+                        }
+                    }
+                }
+            }
+        '''
+        variables = {"ids": product_ids}
+        response = self.send_request(query=query, variables=variables)
+        return response
+
+    # def bulk_update_option_names(self, csv_filepath, jsonl_file_path):
+    #     df = pd.read_csv(csv_filepath)
+    #     # sample
+    #     # df = df[:10]
+        
+    #     response = self.get_products_id_by_handle(handles=df['Handle'].tolist())
+    #     nodes = response['data']['products']['edges']
+    #     records = [node['node'] for node in nodes]
+    #     id_df = pd.DataFrame(records)
+        
+    #     df_with_id = pd.merge(df, id_df, left_on='Handle', right_on='handle', how='left')
+    #     unique_df = df_with_id.drop_duplicates('id')
+        
+    #     # Fetch existing product options with IDs
+    #     product_ids = unique_df['id'].tolist()
+    #     options_response = self.get_product_options_with_ids(product_ids)
+        
+    #     # Build update list - only for options named "Custome License Plate"
+    #     update_list = []
+    #     for product_node in options_response['data']['nodes']:
+    #         if product_node is None:
+    #             continue
+            
+    #         product_id = product_node['id']
+    #         existing_options = product_node['options']
+            
+    #         # Find and update only "Custome License Plate" options
+    #         for option in existing_options:
+    #             if option['name'] == 'Custome License Plate':
+    #                 update_list.append({
+    #                     'productId': product_id,
+    #                     'option': {
+    #                         'id': option['id'],
+    #                         'name': 'Custom License Plate'  # Fixed spelling
+    #                     }
+    #                 })
+        
+    #     print(f"Total options to update: {len(update_list)}")
+        
+    #     # Process in chunks
+    #     chunked_update_list = self.chunk_list(update_list, chunk_size=50)
+        
+    #     for chunk_idx, item in enumerate(chunked_update_list):
+    #         print(f"Processing chunk {chunk_idx + 1}/{len(chunked_update_list)}")
+            
+    #         with open(jsonl_file_path, 'w', encoding='utf-8') as outfile:
+    #             for data in item:
+    #                 outfile.write(json.dumps(data, ensure_ascii=False) + '\n')
+            
+    #         print(f"Successfully wrote to '{jsonl_file_path}'")
+            
+    #         staged_target = self.generate_staged_target()
+    #         self.upload_jsonl(staged_target=staged_target, jsonl_path=jsonl_file_path)
+    #         response = self.update_product_options(staged_target=staged_target)
+            
+    #         print(f"Bulk operation started: {response}")
+            
+    #         completed = False
+    #         while not completed:
+    #             time.sleep(3)
+    #             status_response = self.pool_operation_status()
+    #             status = status_response['data']['currentBulkOperation']['status']
+    #             print(f"Status: {status}")
+                
+    #             if status == 'COMPLETED':
+    #                 completed = True
+    #                 print(f"Chunk {chunk_idx + 1} completed successfully")
+    #                 break
+    #             elif status == 'FAILED':
+    #                 print(f"Chunk {chunk_idx + 1} failed")
+    #                 break
+
+    def bulk_update_option_names(self, csv_filepath, jsonl_file_path):
+        df = pd.read_csv(csv_filepath)
+        
+        response = self.get_products_id_by_handle(handles=df['Handle'].tolist())
+        nodes = response['data']['products']['edges']
+        records = [node['node'] for node in nodes]
+        id_df = pd.DataFrame(records)
+        
+        df_with_id = pd.merge(df, id_df, left_on='Handle', right_on='handle', how='left')
+        unique_df = df_with_id.drop_duplicates('id')
+        
+        # Fetch existing product options with IDs - CHUNK THE REQUESTS
+        product_ids = unique_df['id'].tolist()
+        print(f"Total products to check: {len(product_ids)}")
+        
+        # Chunk product IDs into groups of 250 (API limit)
+        chunked_product_ids = self.chunk_list(product_ids, chunk_size=250)
+        
+        # Build update list - only for options named "Custome License Plate"
+        update_list = []
+        
+        for chunk_idx, product_id_chunk in enumerate(chunked_product_ids):
+            print(f"Fetching options for chunk {chunk_idx + 1}/{len(chunked_product_ids)}...")
+            options_response = self.get_product_options_with_ids(product_id_chunk)
+            
+            if options_response.get('data') is None or options_response['data'].get('nodes') is None:
+                print(f"Error fetching chunk {chunk_idx + 1}: {options_response}")
+                continue
+            
+            for product_node in options_response['data']['nodes']:
+                if product_node is None:
+                    continue
+                
+                product_id = product_node['id']
+                existing_options = product_node['options']
+                
+                # Find and update only "Custome License Plate" options
+                for option in existing_options:
+                    if option['name'] == 'Custome License Plate':
+                        update_list.append({
+                            'productId': product_id,
+                            'option': {
+                                'id': option['id'],
+                                'name': 'Custom License Plate'  # Fixed spelling
+                            }
+                        })
+        
+        print(f"Total options to update: {len(update_list)}")
+        
+        if len(update_list) == 0:
+            print("No options found with name 'Custome License Plate'")
+            return
+        
+        # Process updates in chunks
+        chunked_update_list = self.chunk_list(update_list, chunk_size=50)
+        
+        for chunk_idx, item in enumerate(chunked_update_list):
+            print(f"Processing update chunk {chunk_idx + 1}/{len(chunked_update_list)}")
+            
+            with open(jsonl_file_path, 'w', encoding='utf-8') as outfile:
+                for data in item:
+                    outfile.write(json.dumps(data, ensure_ascii=False) + '\n')
+            
+            print(f"Successfully wrote to '{jsonl_file_path}'")
+            
+            staged_target = self.generate_staged_target()
+            self.upload_jsonl(staged_target=staged_target, jsonl_path=jsonl_file_path)
+            response = self.update_product_options(staged_target=staged_target)
+            
+            print(f"Bulk operation started: {response}")
+            
+            completed = False
+            while not completed:
+                time.sleep(3)
+                status_response = self.pool_operation_status()
+                status = status_response['data']['currentBulkOperation']['status']
+                print(f"Status: {status}")
+                
+                if status == 'COMPLETED':
+                    completed = True
+                    print(f"Update chunk {chunk_idx + 1} completed successfully")
+                    break
+                elif status == 'FAILED':
+                    print(f"Update chunk {chunk_idx + 1} failed")
+                    break
+
+    def bulk_update_template(self, csv_filepath, jsonl_file_path):
+        df = pd.read_csv(csv_filepath)
+        
+        response = self.get_products_id_by_handle(handles=df['Handle'].tolist())
+        nodes = response['data']['products']['edges']
+        records = [node['node'] for node in nodes]
+        id_df = pd.DataFrame(records)
+        
+        df_with_id = pd.merge(df, id_df, left_on='Handle', right_on='handle', how='left')
+        unique_df = df_with_id.drop_duplicates('id')
+        
+        # Fetch existing product options with IDs - CHUNK THE REQUESTS
+        product_ids = unique_df['id'].tolist()
+        print(f"Total products to check: {len(product_ids)}")
+        
+        # Chunk product IDs into groups of 250 (API limit)
+        chunked_product_ids = self.chunk_list(product_ids, chunk_size=250)
+        
+        for chunk_idx, item in enumerate(chunked_update_list):
+            print(f"Processing update chunk {chunk_idx + 1}/{len(chunked_update_list)}")
+            
+            with open(jsonl_file_path, 'w', encoding='utf-8') as outfile:
+                for data in item:
+                    outfile.write(json.dumps(data, ensure_ascii=False) + '\n')
+            
+            print(f"Successfully wrote to '{jsonl_file_path}'")
+            
+            staged_target = self.generate_staged_target()
+            self.upload_jsonl(staged_target=staged_target, jsonl_path=jsonl_file_path)
+            response = self.update_product_options(staged_target=staged_target)
+            
+            print(f"Bulk operation started: {response}")
+            
+            completed = False
+            while not completed:
+                time.sleep(3)
+                status_response = self.pool_operation_status()
+                status = status_response['data']['currentBulkOperation']['status']
+                print(f"Status: {status}")
+                
+                if status == 'COMPLETED':
+                    completed = True
+                    print(f"Update chunk {chunk_idx + 1} completed successfully")
+                    break
+                elif status == 'FAILED':
+                    print(f"Update chunk {chunk_idx + 1} failed")
+                    break
+
     # Delete
     # ===================================== Product ====================================
     def delete_products_by_handle(self, handles):
@@ -2598,12 +2985,24 @@ if __name__ == '__main__':
     # products = s.fetch_all_products_with_filter(
         # filters={'inventory_total': '>0'}
         # filters={'status': 'ACTIVE'}
-        # filters = {'handle': 'magic-cars-best-toy-train-ride-on-for-children-w-parental-control-and-working-stack'}
+        # filters = {'handle': '12v-kids-ride-on-truck-car-with-remote-control-threaded-wheels-3-speeds-led-14649'}
     # )
 
     # df = pd.DataFrame(products)
 
-    # df.to_csv('data/active_products_with_inventory.csv', index=False)
+    # df.to_csv('data/12v-kids-ride-on-truck-car-with-remote-control-threaded-wheels-3-speeds-led-14649.csv', index=False)
+
+    # ======================================= Get Products with Filter =======================================
+    # products = s.get_products_with_filter(
+    #     filters = {'handle': '12v-kids-ride-on-truck-car-with-remote-control-threaded-wheels-3-speeds-led-14649'}
+    # )
+
+    # nodes = products['data']['products']['edges']
+
+    # records = [node['node'] for node in nodes]
+
+    # df = pd.DataFrame.from_records(records)
+    # df.to_csv('data/trendtimes-12v-kids-ride-on-truck-car-with-remote-control-threaded-wheels-3-speeds-led-14649.csv', index=False)
 
     # =================================== Bulk Update Products ==================================
     # df = pd.read_csv('data/active_products_with_inventory.csv')
@@ -2640,4 +3039,10 @@ if __name__ == '__main__':
     # s.update_files_alt_text(csv_filepath='data/corrected_files_with_ebay_alttext.csv', jsonl_file_path='data/bulk_op_vars.jsonl')
 
     # =================================== Bulk_Update Description ==========================================
-    s.bulk_update_product_descriptions(csv_filepath='/home/harits/Projects/shopifyAPI/data/magiccars_sample_formatting_progress.csv', jsonl_file_path='data/bulk_op_vars.jsonl')
+    # s.bulk_update_product_descriptions(csv_filepath='/home/harits/Projects/shopifyAPI/data/corrected_desc.csv', jsonl_file_path='data/bulk_op_vars.jsonl')
+
+    # =================================== Bulk_Update Option Names ==========================================
+    s.bulk_update_option_names(csv_filepath='/home/harits/Projects/shopifyAPI/data/corrected_custome_issue_products.csv', jsonl_file_path='data/bulk_op_vars.jsonl')
+
+
+    
